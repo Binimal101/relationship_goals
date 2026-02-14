@@ -1736,11 +1736,11 @@ function LocationGallery({ photos, onPhotoClick }: { photos: Photo[]; onPhotoCli
   return (
     <div className="flex flex-col">
       {/* Main preview */}
-      <div className="relative aspect-video bg-black/5 cursor-pointer" onClick={() => onPhotoClick(active)}>
+      <div className="relative w-full max-h-[65vh] sm:max-h-[75vh] bg-black/5 cursor-pointer flex items-center justify-center overflow-hidden" onClick={() => onPhotoClick(active)}>
         <img
           src={active.src}
           alt={active.title}
-          className="w-full h-full object-cover transition-opacity duration-300"
+          className="max-w-full max-h-full object-contain transition-opacity duration-300"
         />
         {active.favorite && (
           <div className="absolute top-4 right-4 bg-rose-500 rounded-full p-2 shadow-lg">
@@ -2139,11 +2139,12 @@ function App() {
           <ScrollArea className="max-h-[85vh]">
             {selectedPhoto && (
               <div className="flex flex-col">
-                <div className="relative aspect-video">
+                <div className="relative w-full max-h-[70vh] sm:max-h-[80vh] bg-black/5 cursor-pointer flex items-center justify-center overflow-hidden">
                   <img
                     src={selectedPhoto.src}
                     alt={selectedPhoto.title}
-                    className="w-full h-full object-cover"
+                    className="max-w-full max-h-full object-contain transition-opacity duration-300"
+                    style={{ width: '100%', height: 'auto' }}
                   />
                   {selectedPhoto.favorite && (
                     <div className="absolute top-4 right-4 bg-rose-500 rounded-full p-2 shadow-lg">
