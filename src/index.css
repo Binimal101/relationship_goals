@@ -1,0 +1,63 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Lato:wght@300;400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 30 30% 97%;
+    --foreground: 340 20% 25%;
+    --card: 30 30% 99%;
+    --card-foreground: 340 20% 25%;
+    --popover: 30 30% 99%;
+    --popover-foreground: 340 20% 25%;
+    --primary: 340 60% 55%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 30 25% 92%;
+    --secondary-foreground: 340 20% 25%;
+    --muted: 30 20% 92%;
+    --muted-foreground: 340 10% 45%;
+    --accent: 340 50% 60%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 30 20% 88%;
+    --input: 30 20% 88%;
+    --ring: 340 60% 55%;
+    --radius: 0.75rem;
+    --sidebar-background: 30 30% 97%;
+    --sidebar-foreground: 340 20% 25%;
+    --sidebar-primary: 340 60% 55%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 30 25% 92%;
+    --sidebar-accent-foreground: 340 20% 25%;
+    --sidebar-border: 30 20% 88%;
+    --sidebar-ring: 340 60% 55%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Lato', sans-serif;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Playfair Display', serif;
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-rose-500 via-pink-500 to-rose-400;
+  }
+  .glass-effect {
+    @apply backdrop-blur-md bg-white/70;
+  }
+}
