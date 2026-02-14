@@ -183,14 +183,17 @@ const milestones: Milestone[] = [
 function calculateTimeTogether(startDate: Date) {
   const now = new Date();
   const diff = now.getTime() - startDate.getTime();
-  
-  const years = Math.floor(diff / (1000 * 60 * 60 * 24 * 365));
-  const days = Math.floor((diff % (1000 * 60 * 60 * 24 * 365)) / (1000 * 60 * 60 * 24));
+
+  const totalSeconds = Math.floor(diff / 1000);
+  const totalDays = Math.floor(totalSeconds / (60 * 60 * 24));
+  const years = Math.floor(totalDays / 365);
+  const days = Math.floor((totalSeconds % (365 * 24 * 60 * 60)) / (24 * 60 * 60));
   const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
   const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
   const seconds = Math.floor((diff % (1000 * 60)) / 1000);
-  
-  return { years, days, hours, minutes, seconds };
+
+  // return both the conventional breakdown and totalDays for display
+  return { years, days, hours, minutes, seconds, totalDays };
 }
 
 // Google Maps libraries
@@ -462,11 +465,15 @@ function AuthPage({ onAuthSuccess }: { onAuthSuccess: () => void }) {
 function AdminPanel({ 
   photos, 
   onUpdatePhotos, 
-  onClose 
+  onClose,
+  relationshipStartDate,
+  onUpdateRelationshipStartDate,
 }: { 
   photos: Photo[]; 
   onUpdatePhotos: (photos: Photo[]) => void;
   onClose: () => void;
+  relationshipStartDate?: Date | null;
+  onUpdateRelationshipStartDate?: (d: Date) => void;
 }) {
   const [localPhotos, setLocalPhotos] = useState<Photo[]>(photos);
   const [editingPhoto, setEditingPhoto] = useState<Photo | null>(null);
@@ -477,6 +484,15 @@ function AdminPanel({
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [isGeocoding, setIsGeocoding] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+
+  // relationship / anniversary editor (admin panel)
+  const [localRelationshipDate, setLocalRelationshipDate] = useState<string>(relationshipStartDate ? relationshipStartDate.toISOString().split('T')[0] : '');
+  const [isSavingRelationshipDate, setIsSavingRelationshipDate] = useState(false);
+  const [relationshipSaveMsg, setRelationshipSaveMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLocalRelationshipDate(relationshipStartDate ? relationshipStartDate.toISOString().split('T')[0] : '');
+  }, [relationshipStartDate]);
 
   const handleSave = async () => {
     // Persist localPhotos to Supabase (upsert) then close
@@ -722,6 +738,55 @@ function AdminPanel({
 
         <ScrollArea className="flex-1 p-6">
           <div className="space-y-3">
+            {/* Relationship / anniversary editor */}
+            <div className="p-4 bg-white/60 rounded-xl border border-rose-100">
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <h4 className="font-medium text-rose-800">Relationship start date</h4>
+                  <p className="text-xs text-rose-500">Used for "Since ..." label and the "Together for" counter.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="date"
+                    value={localRelationshipDate}
+                    onChange={(e) => setLocalRelationshipDate(e.target.value)}
+                    className="text-sm"
+                  />
+                  <Button
+                    onClick={async () => {
+                      setIsSavingRelationshipDate(true);
+                      setRelationshipSaveMsg(null);
+                      try {
+                        // prefer new `anniversaries` table; fall back to `site_settings` if table missing
+                        const { error: upsertErr } = await supabase.from('anniversaries').upsert({ id: 1, start_date: localRelationshipDate });
+                        if (upsertErr) {
+                          // fallback: save into site_settings (legacy)
+                          console.warn('anniversaries.upsert failed, falling back to site_settings', upsertErr.message || upsertErr);
+                          const { error: ssErr } = await supabase.from('site_settings').upsert({ key: 'relationship_start_date', value: { date: localRelationshipDate } }, { onConflict: 'key' });
+                          if (ssErr) throw ssErr;
+                        }
+
+                        // notify parent to refresh UI immediately
+                        if (onUpdateRelationshipStartDate) onUpdateRelationshipStartDate(new Date(localRelationshipDate));
+                        setRelationshipSaveMsg('Saved');
+                      } catch (err) {
+                        console.error('failed to save relationship start date', err);
+                        setRelationshipSaveMsg('Failed to save');
+                      } finally {
+                        setIsSavingRelationshipDate(false);
+                        setTimeout(() => setRelationshipSaveMsg(null), 2500);
+                      }
+                    }}
+                    disabled={!localRelationshipDate || isSavingRelationshipDate}
+                    className="whitespace-nowrap"
+                  >
+                    {isSavingRelationshipDate ? 'Saving...' : 'Save'}
+                  </Button>
+                </div>
+              </div>
+              {relationshipSaveMsg && <div className="text-sm text-rose-600 mt-2">{relationshipSaveMsg}</div>}
+            </div>
+
             {localPhotos.map((photo, index) => (
               <div
                 key={photo.id}
@@ -1130,7 +1195,7 @@ function TimeTogether({ startDate }: { startDate: Date }) {
       <span>Together for:</span>
       <div className="flex gap-2 font-mono text-sm">
         {time.years > 0 && <span className="bg-rose-100 px-2 py-1 rounded-lg">{time.years}y</span>}
-        <span className="bg-rose-100 px-2 py-1 rounded-lg">{time.days}d</span>
+        <span className="bg-rose-100 px-2 py-1 rounded-lg">{time.totalDays}d</span>
         <span className="bg-rose-100 px-2 py-1 rounded-lg">{time.hours}h</span>
         <span className="bg-rose-100 px-2 py-1 rounded-lg">{time.minutes}m</span>
         <span className="bg-rose-100 px-2 py-1 rounded-lg">{time.seconds}s</span>
@@ -1301,13 +1366,31 @@ function App() {
           .order('sort_order', { ascending: true });
         if (!milestonesError && mounted && milestonesData) setRemoteMilestones(milestonesData as Milestone[]);
 
-        const { data: settingsData, error: settingsError } = await supabase
-          .from('site_settings')
-          .select('value')
-          .eq('key', 'relationship_start_date')
-          .maybeSingle();
-        if (!settingsError && mounted && settingsData?.value?.date) {
-          setRelationshipStartDate(new Date(settingsData.value.date));
+        // prefer dedicated `anniversaries` table (new); fall back to `site_settings` (legacy)
+        try {
+          const { data: annData, error: annErr } = await supabase.from('anniversaries').select('start_date').limit(1).maybeSingle();
+          if (!annErr && annData?.start_date && mounted) {
+            setRelationshipStartDate(new Date(annData.start_date));
+          } else {
+            const { data: settingsData, error: settingsError } = await supabase
+              .from('site_settings')
+              .select('value')
+              .eq('key', 'relationship_start_date')
+              .maybeSingle();
+            if (!settingsError && mounted && settingsData?.value?.date) {
+              setRelationshipStartDate(new Date(settingsData.value.date));
+            }
+          }
+        } catch (err) {
+          console.warn('failed to read anniversaries table, falling back to site_settings', err);
+          const { data: settingsData, error: settingsError } = await supabase
+            .from('site_settings')
+            .select('value')
+            .eq('key', 'relationship_start_date')
+            .maybeSingle();
+          if (!settingsError && mounted && settingsData?.value?.date) {
+            setRelationshipStartDate(new Date(settingsData.value.date));
+          }
         }
       } catch (err) {
         console.error('loadFromDb error', err);
@@ -1361,6 +1444,8 @@ function App() {
           photos={photos} 
           onUpdatePhotos={handleUpdatePhotos}
           onClose={() => setShowAdmin(false)}
+          relationshipStartDate={relationshipStartDate}
+          onUpdateRelationshipStartDate={(d: Date) => setRelationshipStartDate(d)}
         />
       )}
 
@@ -1399,7 +1484,7 @@ function App() {
           </h1>
           
           <p className="text-xl md:text-2xl text-rose-700/80 mb-4 font-light italic">
-            "Every love story is beautiful, but ours is my favorite."
+            "Every time I think of us, it’s not the big moments — it’s the quiet lambing in between."
           </p>
           
           <div className="flex items-center justify-center gap-4 mt-8 text-rose-600/70">
@@ -1533,12 +1618,12 @@ function App() {
             Forever & Always
           </h3>
           <p className="text-rose-700/70 text-lg mb-8 italic">
-            "In all the world, there is no heart for me like yours. In all the world, there is no love for you like mine."
+            “I don’t need promises of forever. I just need you choosing me, even when it’s hard.”
           </p>
           <div className="flex items-center justify-center gap-2 text-rose-500">
             <span className="text-sm">Made with</span>
             <Heart className="w-4 h-4 fill-current" />
-            <span className="text-sm">for you</span>
+            <span className="text-sm">for you, sweetheart ko; mahal kita</span>
           </div>
         </div>
       </footer>
