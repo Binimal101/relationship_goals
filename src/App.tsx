@@ -1485,7 +1485,11 @@ function App() {
           <div className="relative">
             <div className="absolute left-6 md:left-1/2 top-0 bottom-0 w-0.5 bg-gradient-to-b from-rose-300 via-pink-400 to-rose-300 md:-translate-x-1/2" />
 
-            {milestones.map((milestone, index) => (
+            {isLoadingRemote && (
+              <div className="w-full text-center text-sm text-rose-500 mb-6">Loading milestones…</div>
+            )}
+
+            {remoteMilestones.map((milestone, index) => (
               <div
                 key={milestone.id}
                 className={`relative flex items-start gap-8 mb-12 ${
