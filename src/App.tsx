@@ -24,6 +24,15 @@ interface Photo {
   lng?: number;
 }
 
+// Helper: detect Supabase storage signed URLs and extract storage_path
+const SUPABASE_SIGNED_URL_RE = /\/storage\/v1\/object\/sign\/photos\/([^?]+)/;
+
+function extractStoragePathFromSignedUrl(url?: string): string | null {
+  if (!url) return null;
+  const m = url.match(SUPABASE_SIGNED_URL_RE);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
 // Milestone data structure
 interface Milestone {
   id: number;
@@ -325,7 +334,13 @@ function AuthPage({ onAuthSuccess }: { onAuthSuccess: () => void }) {
 
     // verify answers server-side via RPC (no plaintext stored in client)
     try {
-      const { data, error } = await supabase.rpc('verify_admin_answers', { answers });
+      const normalizedAnswers = { ...answers };
+      if (typeof answers.firstPlace === 'string') {
+        // compare the first-place answer case-insensitively
+        normalizedAnswers.firstPlace = answers.firstPlace.trim().toLowerCase();
+      }
+
+      const { data, error } = await supabase.rpc('verify_admin_answers', { answers: normalizedAnswers });
       const ok = data === true || (Array.isArray(data) && data[0] === true);
       if (error) {
         console.error('verify_admin_answers rpc error', error);
@@ -526,16 +541,34 @@ function AdminPanel({
   }, [relationshipStartDate]);
 
   const handleSave = async () => {
-    // Persist localPhotos to Supabase (upsert) then close
+    // Persist localPhotos to Supabase (upsert).
+    // For storage-backed photos we MUST persist `storage_path` (the canonical pointer) instead of the ephemeral signed URL.
     try {
-      const { data, error } = await supabase.from('photos').upsert(localPhotos).select();
+      // Upsert only the canonical DB columns — do NOT persist ephemeral `src` values.
+      const toUpsert = localPhotos.map(({ id, title, date, location, description, favorite, storage_path, lat, lng }) => (
+        { id, title, date, location, description, favorite, storage_path, lat, lng }
+      ));
+
+      const { data, error } = await supabase.from('photos').upsert(toUpsert).select();
       if (error) {
         console.error('Failed to upsert photos:', error);
         // still update UI locally
         onUpdatePhotos(localPhotos);
       } else if (data) {
-        setLocalPhotos(data as Photo[]);
-        onUpdatePhotos(data as Photo[]);
+        // resolve signed URLs for any rows that have a storage_path so UI keeps showing a valid runtime URL
+        const resolved = await Promise.all((data as any[]).map(async (r) => {
+          if (r.storage_path) {
+            try {
+              const { data: signed, error: signedErr } = await supabase.storage.from('photos').createSignedUrl(r.storage_path, 60 * 60);
+              if (!signedErr && signed?.signedUrl) return { ...r, src: signed.signedUrl };
+            } catch (err) { console.warn('createSignedUrl error', err); }
+            return { ...r, src: r.src };
+          }
+          return r;
+        }));
+
+        setLocalPhotos(resolved as Photo[]);
+        onUpdatePhotos(resolved as Photo[]);
       }
     } catch (err) {
       console.error(err);
@@ -582,9 +615,10 @@ function AdminPanel({
         const filePath = `${Date.now()}_${uploadedFile.name}`;
         const { error: uploadErr } = await supabase.storage.from('photos').upload(filePath, uploadedFile, { upsert: true });
         if (!uploadErr) {
+          // persist canonical storage_path (DO NOT store the ephemeral signed URL in DB)
+          editingPhoto.storage_path = filePath;
           const { data: signedUrlData, error: signedErr } = await supabase.storage.from('photos').createSignedUrl(filePath, 60 * 60);
           if (!signedErr && signedUrlData?.signedUrl) finalSrc = signedUrlData.signedUrl;
-          editingPhoto.storage_path = filePath;
           setUploadError(null);
         } else {
           console.warn('storage upload failed', uploadErr);
@@ -594,9 +628,26 @@ function AdminPanel({
         console.warn('storage upload exception', err);
         setUploadError('Storage upload failed (exception). File will be saved as a data-URL until uploads are enabled for admins.');
       }
+    } else {
+      // If no new upload but `src` contains a Supabase signed URL, extract storage_path so we persist the pointer instead of the ephemeral URL
+      if (!editingPhoto.storage_path && typeof editingPhoto.src === 'string') {
+        const extracted = extractStoragePathFromSignedUrl(editingPhoto.src);
+        if (extracted) editingPhoto.storage_path = extracted;
+      }
     }
 
-    const toUpsert = { ...editingPhoto, src: finalSrc, storage_path: editingPhoto.storage_path };
+    // Prepare DB row — persist canonical columns only (do NOT write `src` to DB).
+    const toUpsert = {
+      id: editingPhoto.id,
+      title: editingPhoto.title,
+      date: editingPhoto.date,
+      location: editingPhoto.location,
+      description: editingPhoto.description,
+      favorite: editingPhoto.favorite,
+      storage_path: editingPhoto.storage_path,
+      lat: editingPhoto.lat,
+      lng: editingPhoto.lng,
+    };
 
     try {
       const { data, error } = await supabase.from('photos').upsert(toUpsert).select();
@@ -605,7 +656,9 @@ function AdminPanel({
         setLocalPhotos(prev => prev.map(p => p.id === editingPhoto.id ? editingPhoto : p));
       } else {
         const updated = Array.isArray(data) ? data[0] : data;
-        setLocalPhotos(prev => prev.map(p => p.id === (updated as any).id ? (updated as Photo) : p));
+        // keep runtime `src` as the signed URL we generated (finalSrc) when storage_path is present
+        const display = (editingPhoto.storage_path ? { ...(updated as Photo), src: finalSrc } : (updated as Photo));
+        setLocalPhotos(prev => prev.map(p => p.id === (display as any).id ? display as Photo : p));
       }
     } catch (err) {
       console.error(err);
@@ -641,6 +694,8 @@ function AdminPanel({
         const filePath = `${Date.now()}_${uploadedFile.name}`;
         const { error: uploadErr } = await supabase.storage.from('photos').upload(filePath, uploadedFile, { upsert: true });
         if (!uploadErr) {
+          // persist canonical storage_path (don't store the ephemeral signed URL in DB)
+          editingPhoto.storage_path = filePath;
           const { data: signedUrlData, error: signedErr } = await supabase.storage.from('photos').createSignedUrl(filePath, 60 * 60);
           if (!signedErr && signedUrlData?.signedUrl) finalSrc = signedUrlData.signedUrl;
           else console.warn('createSignedUrl failed', signedErr);
@@ -652,7 +707,18 @@ function AdminPanel({
       }
     }
 
-    const photoToInsert = { ...editingPhoto, src: finalSrc };
+    // Persist canonical columns into DB (do NOT write `src`). Use `finalSrc` for immediate UI display.
+    const photoToInsert = {
+      id: editingPhoto.id,
+      title: editingPhoto.title,
+      date: editingPhoto.date,
+      location: editingPhoto.location,
+      description: editingPhoto.description,
+      favorite: editingPhoto.favorite,
+      storage_path: editingPhoto.storage_path,
+      lat: editingPhoto.lat,
+      lng: editingPhoto.lng,
+    };
     try {
       const { data, error } = await supabase.from('photos').insert(photoToInsert).select();
       if (error) {
@@ -661,8 +727,10 @@ function AdminPanel({
         onUpdatePhotos([...localPhotos, photoToInsert]);
       } else {
         const inserted = Array.isArray(data) ? data[0] : data;
-        setLocalPhotos(prev => [...prev, inserted as Photo]);
-        onUpdatePhotos([...localPhotos, inserted as Photo]);
+        // show the signed URL in UI immediately when storage_path was used
+        const displayInserted = editingPhoto.storage_path ? { ...(inserted as Photo), src: finalSrc } : (inserted as Photo);
+        setLocalPhotos(prev => [...prev, displayInserted as Photo]);
+        onUpdatePhotos([...localPhotos, displayInserted as Photo]);
       }
     } catch (err) {
       console.error(err);
