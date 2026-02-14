@@ -47,6 +47,12 @@ const MILESTONE_ICONS: Record<string, React.ReactNode> = {
 
 const MILESTONE_ICON_NAMES = Object.keys(MILESTONE_ICONS);
 
+/**
+ * Get the React icon node corresponding to a milestone icon name.
+ *
+ * @param name - One of the keys from `MILESTONE_ICON_NAMES`; if omitted or not recognized, defaults to `"heart"`.
+ * @returns The `React.ReactNode` for the requested icon, or a heart icon node when the name is missing or unknown.
+ */
 function iconFromName(name?: string): React.ReactNode {
   return MILESTONE_ICONS[name || 'heart'] || <Heart className="w-5 h-5" />;
 }
@@ -198,7 +204,18 @@ const milestones: Milestone[] = [
   }
 ];
 
-// Time together calculator
+/**
+ * Compute elapsed time components since a given start date.
+ *
+ * @param startDate - The starting date/time to measure elapsed time from
+ * @returns An object with:
+ *  - `years`: full years elapsed,
+ *  - `days`: whole days remaining after extracting `years`,
+ *  - `hours`: whole hours remaining after extracting days,
+ *  - `minutes`: whole minutes remaining after extracting hours,
+ *  - `seconds`: whole seconds remaining after extracting minutes,
+ *  - `totalDays`: total whole days elapsed since `startDate`
+ */
 function calculateTimeTogether(startDate: Date) {
   const now = new Date();
   const diff = now.getTime() - startDate.getTime();
@@ -218,7 +235,16 @@ function calculateTimeTogether(startDate: Date) {
 // Google Maps libraries (include 'marker' for AdvancedMarkerElement)
 const mapLibraries = ["places", "marker"] as const;
 
-// Date formatter - auto formats input to MM/DD/YYYY
+/**
+ * Format free-form user input progressively into `MM/DD/YYYY`.
+ *
+ * Non-digit characters in `value` are ignored; the returned string is built incrementally
+ * so partial inputs produce partial, valid date fragments (e.g. "3" -> "3", "031" -> "03/1").
+ *
+ * @param value - Free-form user-entered date string; may include non-digits
+ * @returns The input formatted as `MM`, `MM/DD`, or `MM/DD/YYYY` depending on length,
+ *          or an empty string if no digits are present.
+ */
 function formatDateInput(value: string): string {
   // Remove all non-digits
   const digits = value.replace(/\D/g, '');
@@ -480,7 +506,20 @@ function AuthPage({ onAuthSuccess }: { onAuthSuccess: () => void }) {
   );
 }
 
-// Admin Panel Component
+/**
+ * Render the admin UI for managing photos, milestones, and the relationship start date.
+ *
+ * Provides a full-featured panel to add, edit, delete, reorder, and upload photos; manage milestone CRUD and icons; search and geocode locations via Google Places; toggle favorites; and persist changes to the backend. Includes local editing dialogs, a relationship/anniversary editor with fallback persistence, and place-suggestion UI with outside-click handling.
+ *
+ * @param photos - Initial list of photos to display and edit
+ * @param onUpdatePhotos - Callback invoked with the updated photo list after local changes are persisted or applied
+ * @param onClose - Callback to close the admin panel
+ * @param relationshipStartDate - Optional current relationship start date used to seed the editor
+ * @param onUpdateRelationshipStartDate - Optional callback invoked when the relationship start date is saved
+ * @param milestones - Initial list of milestones to display and edit
+ * @param onUpdateMilestones - Callback invoked with the updated milestone list after changes
+ * @returns The Admin Panel JSX element for managing site photos, milestones, and relationship date
+ */
 function AdminPanel({ 
   photos, 
   onUpdatePhotos, 
@@ -1261,7 +1300,15 @@ function AdminPanel({
   );
 }
 
-// Smart Carousel — no duplication when all photos fit; cyclical wrap-around when they don't
+/**
+ * Render a horizontally scrollable photo carousel that duplicates items for a seamless cyclical wrap-around when the content overflows the viewport.
+ *
+ * The carousel supports mouse drag, touch swipe, and keyboard arrow navigation, shows left/right navigation controls when scrollable, and displays a centered static layout when all photos fit.
+ *
+ * @param photos - Array of photos to display in the carousel
+ * @param onPhotoClick - Callback invoked with the clicked photo
+ * @returns A React element containing the interactive, optionally wrap-around photo carousel
+ */
 function InfiniteCarousel({ 
   photos, 
   onPhotoClick 
@@ -1515,7 +1562,18 @@ function TimeTogether({ startDate }: { startDate: Date }) {
   );
 }
 
-// Google Maps Component
+/**
+ * Render a Google Map with grouped photo markers and an in-map location gallery.
+ *
+ * Groups input photos by exact latitude/longitude, places clustered markers that show the number of photos
+ * at each location, and opens a LocationGallery dialog when a marker is clicked. Uses AdvancedMarkerElement when
+ * available and falls back to classic markers. Shows a loading placeholder while the Maps API loads and a
+ * friendly error card if the API fails to initialize.
+ *
+ * @param photos - Array of photos; entries with `lat` and `lng` are grouped and rendered as map markers.
+ * @param onPhotoClick - Callback invoked with a photo when the user selects a photo from the location gallery.
+ * @returns A React element containing the map, rendered markers, and the location gallery dialog.
+ */
 function PhotoMap({ photos, onPhotoClick }: { photos: Photo[]; onPhotoClick: (photo: Photo) => void }) {
   // NOTE: we only render PhotoMap when a valid API key exists (App handles fallback).
   const { isLoaded, loadError } = useJsApiLoader({
@@ -1650,7 +1708,14 @@ function PhotoMap({ photos, onPhotoClick }: { photos: Photo[]; onPhotoClick: (ph
   );
 }
 
-// Gallery view for a group of photos at one map location
+/**
+ * Displays a gallery for photos at a single map location with a main preview, thumbnails, and navigation.
+ *
+ * Supports keyboard left/right navigation and prev/next buttons; clicking the main preview invokes the provided callback with the currently active photo.
+ *
+ * @param photos - The photos belonging to this location, in display order.
+ * @param onPhotoClick - Called with the currently active `Photo` when the main preview is clicked.
+ */
 function LocationGallery({ photos, onPhotoClick }: { photos: Photo[]; onPhotoClick: (photo: Photo) => void }) {
   const [activeIdx, setActiveIdx] = useState(0);
   const active = photos[activeIdx];
@@ -1742,6 +1807,13 @@ function LocationGallery({ photos, onPhotoClick }: { photos: Photo[]; onPhotoCli
   );
 }
 
+/**
+ * Root application component that renders the public UI, admin tooling, and data-driven sections (hero, map, photo gallery, timeline, and dialogs).
+ *
+ * Loads photos, milestones, and relationship start date from the backend on mount, resolves private image URLs, and coordinates authentication and admin flows for managing photos and milestones.
+ *
+ * @returns The top-level React element for the entire application UI.
+ */
 function App() {
   const [photos, setPhotos] = useState<Photo[]>(initialPhotos);
   const [selectedPhoto, setSelectedPhoto] = useState<Photo | null>(null);
