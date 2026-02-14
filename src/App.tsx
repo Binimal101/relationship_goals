@@ -33,6 +33,19 @@ function extractStoragePathFromSignedUrl(url?: string): string | null {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
+// Defensive: normalize signed URLs that may be returned as a relative path
+// (safety for builds that ran without VITE_SUPABASE_URL). Uses the canonical
+// Supabase URL exported from `src/lib/supabase.ts`.
+import { SUPABASE_URL } from '@/lib/supabase';
+function normalizeSignedUrl(raw?: string | null): string | undefined {
+  if (!raw) return undefined;
+  // already absolute
+  if (raw.startsWith('http://') || raw.startsWith('https://')) return raw;
+  // relative path from Supabase SDK — prepend canonical URL
+  if (raw.startsWith('/')) return `${SUPABASE_URL}${raw}`;
+  return raw;
+}
+
 // Milestone data structure
 interface Milestone {
   id: number;
@@ -559,8 +572,12 @@ function AdminPanel({
         const resolved = await Promise.all((data as any[]).map(async (r) => {
           if (r.storage_path) {
             try {
+              // Prefer the public URL if the bucket/object is public — avoids signing from the client.
+              const publicRes = supabase.storage.from('photos').getPublicUrl(r.storage_path);
+              if (publicRes?.data?.publicUrl) return { ...r, src: publicRes.data.publicUrl };
+
               const { data: signed, error: signedErr } = await supabase.storage.from('photos').createSignedUrl(r.storage_path, 60 * 60);
-              if (!signedErr && signed?.signedUrl) return { ...r, src: signed.signedUrl };
+              if (!signedErr && signed?.signedUrl) return { ...r, src: normalizeSignedUrl(signed.signedUrl) };
             } catch (err) { console.warn('createSignedUrl error', err); }
             return { ...r, src: r.src };
           }
@@ -618,7 +635,11 @@ function AdminPanel({
           // persist canonical storage_path (DO NOT store the ephemeral signed URL in DB)
           editingPhoto.storage_path = filePath;
           const { data: signedUrlData, error: signedErr } = await supabase.storage.from('photos').createSignedUrl(filePath, 60 * 60);
-          if (!signedErr && signedUrlData?.signedUrl) finalSrc = signedUrlData.signedUrl;
+          if (!signedErr && signedUrlData?.signedUrl) finalSrc = normalizeSignedUrl(signedUrlData.signedUrl) ?? finalSrc;
+          else {
+            const pub = supabase.storage.from('photos').getPublicUrl(filePath);
+            if (pub?.data?.publicUrl) finalSrc = pub.data.publicUrl;
+          }
           setUploadError(null);
         } else {
           console.warn('storage upload failed', uploadErr);
@@ -697,8 +718,12 @@ function AdminPanel({
           // persist canonical storage_path (don't store the ephemeral signed URL in DB)
           editingPhoto.storage_path = filePath;
           const { data: signedUrlData, error: signedErr } = await supabase.storage.from('photos').createSignedUrl(filePath, 60 * 60);
-          if (!signedErr && signedUrlData?.signedUrl) finalSrc = signedUrlData.signedUrl;
-          else console.warn('createSignedUrl failed', signedErr);
+          if (!signedErr && signedUrlData?.signedUrl) finalSrc = normalizeSignedUrl(signedUrlData.signedUrl) ?? finalSrc;
+          else {
+            const pub = supabase.storage.from('photos').getPublicUrl(filePath);
+            if (pub?.data?.publicUrl) finalSrc = pub.data.publicUrl;
+            else console.warn('createSignedUrl failed', signedErr);
+          }
         } else {
           console.warn('storage upload failed', uploadErr);
         }
@@ -1842,8 +1867,12 @@ function App() {
           const resolved = await Promise.all((photosData as any[]).map(async (p) => {
             if (p.storage_path) {
               try {
+                // Prefer public URL for public buckets (avoid anonymous signing failures).
+                const publicRes = supabase.storage.from('photos').getPublicUrl(p.storage_path);
+                if (publicRes?.data?.publicUrl) return { ...p, src: publicRes.data.publicUrl };
+
                 const { data: signed, error: signedErr } = await supabase.storage.from('photos').createSignedUrl(p.storage_path, 60 * 60);
-                if (!signedErr && signed?.signedUrl) return { ...p, src: signed.signedUrl };
+                if (!signedErr && signed?.signedUrl) return { ...p, src: normalizeSignedUrl(signed.signedUrl) };
               } catch (err) {
                 console.warn('createSignedUrl error', err);
               }

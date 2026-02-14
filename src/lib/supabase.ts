@@ -15,3 +15,6 @@ if (!supabaseAnonKey) {
 }
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+// Export canonical project URL for runtime normalization elsewhere in the app
+export const SUPABASE_URL = supabaseUrl;
