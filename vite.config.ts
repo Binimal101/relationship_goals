@@ -12,4 +12,10 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  preview: {
+    // allow the preview server to accept the external host used by your deployer
+    host: true,
+    port: 4173,
+    allowedHosts: ['ynp-mjt.page', 'localhost']
+  }
 });
