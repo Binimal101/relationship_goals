@@ -5,9 +5,10 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { supabase } from '@/lib/supabase';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { GoogleMap, useJsApiLoader, Marker } from '@react-google-maps/api';
+import { GoogleMap, useJsApiLoader } from '@react-google-maps/api';
 
 // Photo data structure
 interface Photo {
@@ -26,10 +27,28 @@ interface Photo {
 // Milestone data structure
 interface Milestone {
   id: number;
-  date: string;
+  date: string;  // ISO date string (YYYY-MM-DD)
   title: string;
   description: string;
   icon: React.ReactNode;
+  icon_name?: string;  // persisted icon name for DB milestones
+}
+
+// Map icon name strings to Lucide components
+const MILESTONE_ICONS: Record<string, React.ReactNode> = {
+  heart: <Heart className="w-5 h-5" />,
+  star: <Star className="w-5 h-5" />,
+  calendar: <Calendar className="w-5 h-5" />,
+  camera: <Camera className="w-5 h-5" />,
+  clock: <Clock className="w-5 h-5" />,
+  mappin: <MapPin className="w-5 h-5" />,
+  check: <Check className="w-5 h-5" />,
+};
+
+const MILESTONE_ICON_NAMES = Object.keys(MILESTONE_ICONS);
+
+function iconFromName(name?: string): React.ReactNode {
+  return MILESTONE_ICONS[name || 'heart'] || <Heart className="w-5 h-5" />;
 }
 
 // Auth questions (no plaintext answers — now stored hashed in DB)
@@ -196,8 +215,8 @@ function calculateTimeTogether(startDate: Date) {
   return { years, days, hours, minutes, seconds, totalDays };
 }
 
-// Google Maps libraries
-const mapLibraries: ("places" | "geometry" | "drawing" | "visualization")[] = ["places"];
+// Google Maps libraries (include 'marker' for AdvancedMarkerElement)
+const mapLibraries = ["places", "marker"] as const;
 
 // Date formatter - auto formats input to MM/DD/YYYY
 function formatDateInput(value: string): string {
@@ -468,12 +487,16 @@ function AdminPanel({
   onClose,
   relationshipStartDate,
   onUpdateRelationshipStartDate,
+  milestones: propMilestones,
+  onUpdateMilestones,
 }: { 
   photos: Photo[]; 
   onUpdatePhotos: (photos: Photo[]) => void;
   onClose: () => void;
   relationshipStartDate?: Date | null;
   onUpdateRelationshipStartDate?: (d: Date) => void;
+  milestones: Milestone[];
+  onUpdateMilestones: (milestones: Milestone[]) => void;
 }) {
   const [localPhotos, setLocalPhotos] = useState<Photo[]>(photos);
   const [editingPhoto, setEditingPhoto] = useState<Photo | null>(null);
@@ -484,6 +507,14 @@ function AdminPanel({
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [isGeocoding, setIsGeocoding] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+
+  // Google Places Autocomplete state (new API — no DOM container needed)
+  const [placeQuery, setPlaceQuery] = useState('');
+  const [placeSuggestions, setPlaceSuggestions] = useState<{ placeId: string; description: string; toPlace: () => any }[]>([]);
+  const [showPlaceSuggestions, setShowPlaceSuggestions] = useState(false);
+  const [geocodeError, setGeocodeError] = useState<string | null>(null);
+  const autocompleteSessionRef = useRef<google.maps.places.AutocompleteSessionToken | null>(null);
+  const placeDropdownRef = useRef<HTMLDivElement>(null);
 
   // relationship / anniversary editor (admin panel)
   const [localRelationshipDate, setLocalRelationshipDate] = useState<string>(relationshipStartDate ? relationshipStartDate.toISOString().split('T')[0] : '');
@@ -691,30 +722,158 @@ function AdminPanel({
     }
   };
 
-  // Geocode location to get lat/lng
-  const geocodeLocation = async () => {
-    if (!editingPhoto?.location) return;
-    
-    setIsGeocoding(true);
-    try {
-      // Using OpenStreetMap Nominatim API (free, no key needed)
-      const response = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(editingPhoto.location)}`
-      );
-      const data = await response.json();
-      
-      if (data && data.length > 0) {
-        const { lat, lon } = data[0];
-        setEditingPhoto(prev => prev ? {
-          ...prev,
-          lat: parseFloat(lat),
-          lng: parseFloat(lon)
-        } : null);
-      }
-    } catch (error) {
-      console.error('Geocoding failed:', error);
+  // Google Places Autocomplete — new API (AutocompleteSuggestion + Place)
+  const handlePlaceSearch = async (query: string) => {
+    setPlaceQuery(query);
+    setGeocodeError(null);
+    if (query.length < 3) { setPlaceSuggestions([]); setShowPlaceSuggestions(false); return; }
+
+    const gPlaces = (window as any).google?.maps?.places;
+    if (!gPlaces) { setGeocodeError('Google Places not loaded'); return; }
+
+    // lazily create session token
+    if (!autocompleteSessionRef.current) {
+      autocompleteSessionRef.current = new google.maps.places.AutocompleteSessionToken();
     }
-    setIsGeocoding(false);
+
+    try {
+      // New API: google.maps.places.AutocompleteSuggestion
+      const { suggestions } = await (gPlaces.AutocompleteSuggestion as any).fetchAutocompleteSuggestions({
+        input: query,
+        sessionToken: autocompleteSessionRef.current,
+      });
+
+      const mapped = (suggestions || []).map((s: any) => ({
+        placeId: s.placePrediction.placeId as string,
+        description: s.placePrediction.text.text as string,
+        toPlace: () => s.placePrediction.toPlace(),
+      }));
+
+      setPlaceSuggestions(mapped);
+      setShowPlaceSuggestions(mapped.length > 0);
+    } catch (err) {
+      console.warn('Autocomplete fetch error', err);
+      setPlaceSuggestions([]);
+    }
+  };
+
+  // When user picks a suggestion — use Place.fetchFields for lat/lng (Essentials)
+  const handlePlaceSelect = async (suggestion: { placeId: string; description: string; toPlace: () => any }) => {
+    setPlaceQuery(suggestion.description);
+    setPlaceSuggestions([]);
+    setShowPlaceSuggestions(false);
+    setIsGeocoding(true);
+    setGeocodeError(null);
+
+    try {
+      const place = suggestion.toPlace();
+      await place.fetchFields({
+        fields: ['location', 'formattedAddress', 'displayName'],
+      });
+
+      // expire session token so next search starts a new billing session
+      autocompleteSessionRef.current = new google.maps.places.AutocompleteSessionToken();
+
+      const loc = place.location;
+      if (loc) {
+        const lat = typeof loc.lat === 'function' ? loc.lat() : loc.lat;
+        const lng = typeof loc.lng === 'function' ? loc.lng() : loc.lng;
+        const locationName = place.formattedAddress || place.displayName || suggestion.description;
+        setEditingPhoto(prev => prev ? ({ ...prev, lat, lng, location: locationName }) : null);
+        setPlaceQuery(locationName);
+      } else {
+        setGeocodeError('Place has no location data');
+      }
+    } catch (err) {
+      console.error('Place.fetchFields error', err);
+      setGeocodeError('Could not fetch place details');
+    } finally {
+      setIsGeocoding(false);
+    }
+  };
+
+  // close suggestions on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (placeDropdownRef.current && !placeDropdownRef.current.contains(e.target as Node)) {
+        setShowPlaceSuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  // ────────────── Milestones CRUD ──────────────
+  const [localMilestones, setLocalMilestones] = useState<Milestone[]>(propMilestones);
+  const [editingMilestone, setEditingMilestone] = useState<Milestone | null>(null);
+  const [isAddingMilestone, setIsAddingMilestone] = useState(false);
+
+  const handleAddMilestone = () => {
+    setEditingMilestone({
+      id: Date.now(),
+      date: new Date().toISOString().slice(0, 10),
+      title: '',
+      description: '',
+      icon: <Heart className="w-5 h-5" />,
+      icon_name: 'heart',
+    });
+    setIsAddingMilestone(true);
+  };
+
+  const handleSaveMilestone = async () => {
+    if (!editingMilestone) return;
+    const baseRow = {
+      event_date: editingMilestone.date,
+      title: editingMilestone.title,
+      description: editingMilestone.description,
+      icon_name: editingMilestone.icon_name || 'heart',
+    };
+    const toMilestone = (row: any): Milestone => ({
+      id: row.id,
+      date: row.event_date,
+      title: row.title,
+      description: row.description,
+      icon: iconFromName(row.icon_name),
+      icon_name: row.icon_name,
+    });
+    try {
+      if (isAddingMilestone) {
+        // Don't send id — it's auto-generated
+        const { data, error } = await supabase.from('milestones').insert(baseRow).select();
+        if (error) { console.error('milestone insert error', error); return; }
+        const inserted = Array.isArray(data) ? data[0] : data;
+        const ms = toMilestone(inserted);
+        const updated = [...localMilestones, ms];
+        setLocalMilestones(updated);
+        onUpdateMilestones(updated);
+      } else {
+        const row = { ...baseRow, id: editingMilestone.id };
+        const { data, error } = await supabase.from('milestones').upsert(row).select();
+        if (error) { console.error('milestone upsert error', error); return; }
+        const saved = Array.isArray(data) ? data[0] : data;
+        const ms = toMilestone(saved);
+        const updated = localMilestones.map(m => m.id === ms.id ? ms : m);
+        setLocalMilestones(updated);
+        onUpdateMilestones(updated);
+      }
+    } catch (err) {
+      console.error('milestone save error', err);
+    } finally {
+      setEditingMilestone(null);
+      setIsAddingMilestone(false);
+    }
+  };
+
+  const handleDeleteMilestone = async (id: number) => {
+    try {
+      const { error } = await supabase.from('milestones').delete().eq('id', id);
+      if (error) console.error('milestone delete error', error);
+      const updated = localMilestones.filter(m => m.id !== id);
+      setLocalMilestones(updated);
+      onUpdateMilestones(updated);
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   return (
@@ -787,6 +946,53 @@ function AdminPanel({
               {relationshipSaveMsg && <div className="text-sm text-rose-600 mt-2">{relationshipSaveMsg}</div>}
             </div>
 
+            {/* ─── Milestones management ─── */}
+            <div className="p-4 bg-white/60 rounded-xl border border-rose-100">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h4 className="font-medium text-rose-800">Milestones</h4>
+                  <p className="text-xs text-rose-500">Manage the "Our Story" timeline entries.</p>
+                </div>
+                <Button onClick={handleAddMilestone} size="sm" className="bg-rose-500 hover:bg-rose-600">
+                  <Plus className="w-4 h-4 mr-1" />
+                  Add
+                </Button>
+              </div>
+
+              {localMilestones.length === 0 && (
+                <p className="text-sm text-rose-400 py-4 text-center">No milestones yet.</p>
+              )}
+
+              <div className="space-y-2">
+                {localMilestones.map(ms => (
+                  <div key={ms.id} className="flex items-center gap-3 p-3 bg-rose-50/50 rounded-lg border border-rose-100">
+                    <div className="w-8 h-8 bg-gradient-to-br from-rose-400 to-pink-500 rounded-full flex items-center justify-center text-white flex-shrink-0">
+                      {ms.icon}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h5 className="font-medium text-rose-800 text-sm truncate">{ms.title || '(untitled)'}</h5>
+                      <p className="text-xs text-rose-500 truncate">{ms.date ? new Date(ms.date + 'T00:00:00').toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : ''}</p>
+                    </div>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <button
+                        onClick={() => { setEditingMilestone({ ...ms }); setIsAddingMilestone(false); }}
+                        className="p-1.5 bg-rose-100 text-rose-600 rounded-lg hover:bg-rose-200"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteMilestone(ms.id)}
+                        className="p-1.5 bg-red-100 text-red-500 rounded-lg hover:bg-red-200"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* ─── Photos list ─── */}
             {localPhotos.map((photo, index) => (
               <div
                 key={photo.id}
@@ -848,7 +1054,7 @@ function AdminPanel({
 
       {/* Edit Dialog */}
       <Dialog open={!!editingPhoto} onOpenChange={() => { setEditingPhoto(null); setIsAdding(false); setUploadedImage(null); }}>
-        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto" aria-describedby={undefined}>
           <DialogTitle>{isAdding ? 'Add New Photo' : 'Edit Photo'}</DialogTitle>
           {editingPhoto && (
             <div className="space-y-4 mt-4">
@@ -914,53 +1120,52 @@ function AdminPanel({
               </div>
               <div>
                 <Label>Location</Label>
-                <div className="flex gap-2">
-                  <Input 
-                    value={editingPhoto.location} 
-                    onChange={(e) => setEditingPhoto({ ...editingPhoto, location: e.target.value })}
-                    placeholder="e.g., Central Park, New York"
+                <div ref={placeDropdownRef} className="relative mt-1">
+                  <Input
+                    value={placeQuery}
+                    onChange={(e) => handlePlaceSearch(e.target.value)}
+                    onFocus={() => { if (placeSuggestions.length) setShowPlaceSuggestions(true); }}
+                    placeholder="Search for a place…"
+                    className="pr-8"
                   />
-                  <Button
-                    type="button"
-                    onClick={geocodeLocation}
-                    disabled={isGeocoding || !editingPhoto.location}
-                    className="bg-rose-500 hover:bg-rose-600 whitespace-nowrap"
-                  >
-                    {isGeocoding ? '...' : 'Find Coords'}
-                  </Button>
+                  {isGeocoding && (
+                    <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                      <div className="w-4 h-4 border-2 border-rose-400 border-t-transparent rounded-full animate-spin" />
+                    </div>
+                  )}
+
+                  {showPlaceSuggestions && placeSuggestions.length > 0 && (
+                    <ul className="absolute z-50 left-0 right-0 mt-1 bg-white border border-rose-200 rounded-xl shadow-lg max-h-56 overflow-auto">
+                      {placeSuggestions.map(p => (
+                        <li
+                          key={p.placeId}
+                          onClick={() => handlePlaceSelect(p)}
+                          className="px-3 py-2.5 text-sm cursor-pointer hover:bg-rose-50 flex items-start gap-2 transition-colors"
+                        >
+                          <MapPin className="w-4 h-4 text-rose-400 mt-0.5 flex-shrink-0" />
+                          <span className="text-rose-800">{p.description}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
+
                 <p className="text-xs text-rose-500 mt-1">
-                  Enter a location and click "Find Coords" to automatically get latitude/longitude
+                  Powered by Google Places (Essentials). Selecting a suggestion auto-fills lat/lng.
                 </p>
+
+                {geocodeError && <div className="text-sm text-amber-700 mt-2">{geocodeError}</div>}
+                {editingPhoto.lat != null && editingPhoto.lng != null && (
+                  <div className="text-sm text-rose-600 mt-2">📍 {editingPhoto.lat.toFixed(5)}, {editingPhoto.lng.toFixed(5)}</div>
+                )}
               </div>
+
               <div>
                 <Label>Description</Label>
                 <Input 
                   value={editingPhoto.description} 
                   onChange={(e) => setEditingPhoto({ ...editingPhoto, description: e.target.value })}
                 />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label>Latitude</Label>
-                  <Input 
-                    type="number"
-                    step="0.0001"
-                    value={editingPhoto.lat || ''} 
-                    onChange={(e) => setEditingPhoto({ ...editingPhoto, lat: parseFloat(e.target.value) || undefined })}
-                    placeholder="Auto-filled from location"
-                  />
-                </div>
-                <div>
-                  <Label>Longitude</Label>
-                  <Input 
-                    type="number"
-                    step="0.0001"
-                    value={editingPhoto.lng || ''} 
-                    onChange={(e) => setEditingPhoto({ ...editingPhoto, lng: parseFloat(e.target.value) || undefined })}
-                    placeholder="Auto-filled from location"
-                  />
-                </div>
               </div>
               <div className="flex items-center gap-2">
                 <Switch 
@@ -985,11 +1190,78 @@ function AdminPanel({
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Milestone Edit Dialog */}
+      <Dialog open={!!editingMilestone} onOpenChange={() => { setEditingMilestone(null); setIsAddingMilestone(false); }}>
+        <DialogContent className="max-w-md" aria-describedby={undefined}>
+          <DialogTitle>{isAddingMilestone ? 'Add Milestone' : 'Edit Milestone'}</DialogTitle>
+          {editingMilestone && (
+            <div className="space-y-4 mt-4">
+              <div>
+                <Label>Title</Label>
+                <Input
+                  value={editingMilestone.title}
+                  onChange={(e) => setEditingMilestone({ ...editingMilestone, title: e.target.value })}
+                  placeholder="e.g., The Day We Met"
+                />
+              </div>
+              <div>
+                <Label>Date</Label>
+                <Input
+                  type="date"
+                  value={editingMilestone.date}
+                  onChange={(e) => setEditingMilestone({ ...editingMilestone, date: e.target.value })}
+                />
+              </div>
+              <div>
+                <Label>Description</Label>
+                <Textarea
+                  value={editingMilestone.description}
+                  onChange={(e) => setEditingMilestone({ ...editingMilestone, description: e.target.value })}
+                  placeholder="What made this moment special?"
+                  rows={3}
+                />
+              </div>
+              <div>
+                <Label>Icon</Label>
+                <div className="flex gap-2 mt-1 flex-wrap">
+                  {MILESTONE_ICON_NAMES.map(name => (
+                    <button
+                      key={name}
+                      type="button"
+                      onClick={() => setEditingMilestone({ ...editingMilestone, icon_name: name, icon: iconFromName(name) })}
+                      className={`w-10 h-10 rounded-lg flex items-center justify-center border-2 transition-all ${
+                        editingMilestone.icon_name === name
+                          ? 'border-rose-500 bg-rose-50 text-rose-600 scale-110'
+                          : 'border-rose-200 text-rose-400 hover:border-rose-300'
+                      }`}
+                    >
+                      {MILESTONE_ICONS[name]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex justify-end gap-3 mt-4">
+                <Button variant="outline" onClick={() => { setEditingMilestone(null); setIsAddingMilestone(false); }}>
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleSaveMilestone}
+                  disabled={!editingMilestone.title}
+                  className="bg-rose-500 hover:bg-rose-600"
+                >
+                  {isAddingMilestone ? 'Add Milestone' : 'Save Changes'}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
-// Infinite Drag Carousel Component (matching the video style)
+// Smart Carousel — no duplication when all photos fit; cyclical wrap-around when they don't
 function InfiniteCarousel({ 
   photos, 
   onPhotoClick 
@@ -1000,38 +1272,76 @@ function InfiniteCarousel({
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [startX, setStartX] = useState(0);
-  const [scrollLeft, setScrollLeft] = useState(0);
+  const [scrollLeftState, setScrollLeftState] = useState(0);
   const [showLeftArrow, setShowLeftArrow] = useState(false);
-  const [showRightArrow, setShowRightArrow] = useState(true);
+  const [showRightArrow, setShowRightArrow] = useState(false);
 
-  // Triple the photos for infinite scroll effect
-  const extendedPhotos = useMemo(() => {
-    return [...photos, ...photos, ...photos];
-  }, [photos]);
+  // card metrics
+  const CARD_W = 288; // w-72 = 18rem = 288px
+  const GAP = 24;     // gap-6 = 1.5rem = 24px
+
+  // Determine whether photos overflow the viewport (needs scrolling / pagination)
+  const needsScroll = useMemo(() => {
+    // rough check: total cards width vs typical viewport
+    const totalW = photos.length * CARD_W + (photos.length - 1) * GAP;
+    return totalW > (typeof window !== 'undefined' ? window.innerWidth : 1200);
+  }, [photos.length]);
+
+  // display list: only duplicate when scrolling is needed
+  const displayPhotos = useMemo(() => {
+    if (!needsScroll) return photos;
+    // duplicate once for wrap-around (original + copy)
+    return [...photos, ...photos];
+  }, [photos, needsScroll]);
 
   const checkArrows = () => {
-    if (containerRef.current) {
-      const { scrollLeft, scrollWidth, clientWidth } = containerRef.current;
-      setShowLeftArrow(scrollLeft > 50);
-      setShowRightArrow(scrollLeft < scrollWidth - clientWidth - 50);
+    if (!containerRef.current || !needsScroll) {
+      setShowLeftArrow(false);
+      setShowRightArrow(false);
+      return;
     }
+    const { scrollLeft, scrollWidth, clientWidth } = containerRef.current;
+    setShowLeftArrow(scrollLeft > 50);
+    setShowRightArrow(scrollLeft < scrollWidth - clientWidth - 50);
   };
 
+  // On mount: if scrollable, start at the beginning (not middle)
   useEffect(() => {
-    const container = containerRef.current;
-    if (container) {
-      // Start in the middle section
-      container.scrollLeft = container.scrollWidth / 3;
+    if (containerRef.current) {
+      containerRef.current.scrollLeft = 0;
       checkArrows();
     }
-  }, []);
+  }, [needsScroll]);
+
+  // Cyclical wrap-around: when the user scrolls past the first copy, snap back to start
+  useEffect(() => {
+    if (!needsScroll) return;
+    const el = containerRef.current;
+    if (!el) return;
+
+    const handleScroll = () => {
+      checkArrows();
+      if (!needsScroll) return;
+      const singleSetWidth = photos.length * (CARD_W + GAP);
+
+      // scrolled past the end of original set → snap to equivalent position at start
+      if (el.scrollLeft >= singleSetWidth) {
+        el.scrollLeft -= singleSetWidth;
+      } else if (el.scrollLeft <= 0) {
+        el.scrollLeft += singleSetWidth;
+      }
+    };
+
+    el.addEventListener('scrollend', handleScroll);
+    return () => el.removeEventListener('scrollend', handleScroll);
+  }, [needsScroll, photos.length]);
 
   // Mouse drag handlers
   const handleMouseDown = (e: React.MouseEvent) => {
     if (!containerRef.current) return;
     setIsDragging(true);
     setStartX(e.pageX - containerRef.current.offsetLeft);
-    setScrollLeft(containerRef.current.scrollLeft);
+    setScrollLeftState(containerRef.current.scrollLeft);
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
@@ -1039,70 +1349,67 @@ function InfiniteCarousel({
     e.preventDefault();
     const x = e.pageX - containerRef.current.offsetLeft;
     const walk = (x - startX) * 1.5;
-    containerRef.current.scrollLeft = scrollLeft - walk;
-    checkArrows();
+    containerRef.current.scrollLeft = scrollLeftState - walk;
   };
 
-  const handleMouseUp = () => {
-    setIsDragging(false);
-  };
-
-  const handleMouseLeave = () => {
-    setIsDragging(false);
-  };
+  const handleMouseUp = () => setIsDragging(false);
+  const handleMouseLeave = () => setIsDragging(false);
 
   // Touch handlers
   const handleTouchStart = (e: React.TouchEvent) => {
     if (!containerRef.current) return;
     setStartX(e.touches[0].pageX - containerRef.current.offsetLeft);
-    setScrollLeft(containerRef.current.scrollLeft);
+    setScrollLeftState(containerRef.current.scrollLeft);
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
     if (!containerRef.current) return;
     const x = e.touches[0].pageX - containerRef.current.offsetLeft;
     const walk = (x - startX) * 1.5;
-    containerRef.current.scrollLeft = scrollLeft - walk;
-    checkArrows();
+    containerRef.current.scrollLeft = scrollLeftState - walk;
   };
 
   // Keyboard navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (!containerRef.current) return;
-      const cardWidth = 320;
+      if (!containerRef.current || !needsScroll) return;
       if (e.key === 'ArrowLeft') {
-        containerRef.current.scrollBy({ left: -cardWidth, behavior: 'smooth' });
+        containerRef.current.scrollBy({ left: -(CARD_W + GAP), behavior: 'smooth' });
       } else if (e.key === 'ArrowRight') {
-        containerRef.current.scrollBy({ left: cardWidth, behavior: 'smooth' });
+        containerRef.current.scrollBy({ left: CARD_W + GAP, behavior: 'smooth' });
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [needsScroll]);
 
   const scroll = (direction: 'left' | 'right') => {
     if (containerRef.current) {
-      const cardWidth = 320;
       containerRef.current.scrollBy({ 
-        left: direction === 'left' ? -cardWidth : cardWidth, 
+        left: direction === 'left' ? -(CARD_W + GAP) : (CARD_W + GAP), 
         behavior: 'smooth' 
       });
     }
   };
 
-  if (photos.length === 0) return null;
+  if (photos.length === 0) {
+    return (
+      <div className="w-full h-72 rounded-3xl bg-rose-50 flex items-center justify-center text-rose-500/80">
+        No photos to show yet — upload one from the Admin Panel.
+      </div>
+    );
+  }
 
   return (
     <div className="relative w-full">
       {/* Left blur edge */}
-      <div className="absolute left-0 top-0 bottom-0 w-24 bg-gradient-to-r from-rose-50 to-transparent z-10 pointer-events-none" />
+      {needsScroll && <div className="absolute left-0 top-0 bottom-0 w-24 bg-gradient-to-r from-rose-50 to-transparent z-10 pointer-events-none" />}
       
       {/* Right blur edge */}
-      <div className="absolute right-0 top-0 bottom-0 w-24 bg-gradient-to-l from-rose-50 to-transparent z-10 pointer-events-none" />
+      {needsScroll && <div className="absolute right-0 top-0 bottom-0 w-24 bg-gradient-to-l from-rose-50 to-transparent z-10 pointer-events-none" />}
 
-      {/* Navigation Arrows */}
-      {showLeftArrow && (
+      {/* Navigation Arrows — only when scrollable */}
+      {needsScroll && showLeftArrow && (
         <button
           onClick={() => scroll('left')}
           className="absolute left-4 top-1/2 -translate-y-1/2 z-20 w-12 h-12 bg-white/90 backdrop-blur-sm rounded-full flex items-center justify-center shadow-lg hover:bg-white transition-all hover:scale-110"
@@ -1110,7 +1417,7 @@ function InfiniteCarousel({
           <ChevronLeft className="w-6 h-6 text-rose-600" />
         </button>
       )}
-      {showRightArrow && (
+      {needsScroll && showRightArrow && (
         <button
           onClick={() => scroll('right')}
           className="absolute right-4 top-1/2 -translate-y-1/2 z-20 w-12 h-12 bg-white/90 backdrop-blur-sm rounded-full flex items-center justify-center shadow-lg hover:bg-white transition-all hover:scale-110"
@@ -1122,17 +1429,19 @@ function InfiniteCarousel({
       {/* Carousel Container */}
       <div
         ref={containerRef}
-        className="flex gap-6 overflow-x-auto scrollbar-hide py-8 px-12 cursor-grab active:cursor-grabbing"
+        className={`flex gap-6 overflow-x-auto scrollbar-hide py-8 px-12 ${
+          needsScroll ? 'cursor-grab active:cursor-grabbing' : 'justify-center'
+        }`}
         style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseLeave}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onScroll={checkArrows}
+        onMouseDown={needsScroll ? handleMouseDown : undefined}
+        onMouseMove={needsScroll ? handleMouseMove : undefined}
+        onMouseUp={needsScroll ? handleMouseUp : undefined}
+        onMouseLeave={needsScroll ? handleMouseLeave : undefined}
+        onTouchStart={needsScroll ? handleTouchStart : undefined}
+        onTouchMove={needsScroll ? handleTouchMove : undefined}
+        onScroll={needsScroll ? checkArrows : undefined}
       >
-        {extendedPhotos.map((photo, index) => (
+        {displayPhotos.map((photo, index) => (
           <div
             key={`${photo.id}-${index}`}
             onClick={() => !isDragging && onPhotoClick(photo)}
@@ -1170,10 +1479,12 @@ function InfiniteCarousel({
         ))}
       </div>
 
-      {/* Drag hint */}
-      <p className="text-center text-rose-400 text-sm mt-2 flex items-center justify-center gap-2">
-        <span>←</span> Drag or use arrow keys to explore <span>→</span>
-      </p>
+      {/* Drag hint — only when scrollable */}
+      {needsScroll && (
+        <p className="text-center text-rose-400 text-sm mt-2 flex items-center justify-center gap-2">
+          <span>←</span> Drag or use arrow keys to explore <span>→</span>
+        </p>
+      )}
     </div>
   );
 }
@@ -1206,12 +1517,16 @@ function TimeTogether({ startDate }: { startDate: Date }) {
 
 // Google Maps Component
 function PhotoMap({ photos, onPhotoClick }: { photos: Photo[]; onPhotoClick: (photo: Photo) => void }) {
-  const { isLoaded } = useJsApiLoader({
-    googleMapsApiKey: '',
-    libraries: mapLibraries,
+  // NOTE: we only render PhotoMap when a valid API key exists (App handles fallback).
+  const { isLoaded, loadError } = useJsApiLoader({
+    googleMapsApiKey: (import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '') as string,
+    libraries: mapLibraries as any,  // stable ref via top-level const
   });
 
   const [selectedLocation, setSelectedLocation] = useState<Photo[] | null>(null);
+
+  const mapRef = useRef<google.maps.Map | null>(null);
+  const markersRef = useRef<Record<string, google.maps.Marker | any>>({});
 
   const locationGroups = useMemo(() => {
     const groups: Record<string, Photo[]> = {};
@@ -1234,6 +1549,17 @@ function PhotoMap({ photos, onPhotoClick }: { photos: Photo[]; onPhotoClick: (ph
     return { lat: avgLat, lng: avgLng };
   }, [photos]);
 
+  if (loadError) {
+    return (
+      <div className="w-full h-96 bg-rose-50 rounded-3xl flex items-center justify-center text-amber-700/90 p-4">
+        <div>
+          <div className="font-medium mb-1">Map failed to load</div>
+          <div className="text-sm">Google Maps API error — check your API key and project restrictions.</div>
+        </div>
+      </div>
+    );
+  }
+
   if (!isLoaded) {
     return (
       <div className="w-full h-96 bg-rose-50 rounded-3xl flex items-center justify-center">
@@ -1248,68 +1574,168 @@ function PhotoMap({ photos, onPhotoClick }: { photos: Photo[]; onPhotoClick: (ph
         mapContainerStyle={{ width: '100%', height: '100%' }}
         center={center}
         zoom={4}
+        onLoad={(map) => { mapRef.current = map; }}
+        onUnmount={() => { mapRef.current = null; Object.values(markersRef.current).forEach((m: any) => { try { m.setMap?.(null); } catch {} }); markersRef.current = {}; }}
         options={{
-          styles: [
-            {
-              featureType: 'all',
-              elementType: 'geometry',
-              stylers: [{ color: '#fdf2f8' }]
-            },
-            {
-              featureType: 'water',
-              elementType: 'geometry',
-              stylers: [{ color: '#fce7f3' }]
-            }
-          ],
+          mapId: import.meta.env.VITE_GOOGLE_MAPS_MAP_ID || 'DEMO_MAP_ID',
+          mapTypeId: 'hybrid',
           disableDefaultUI: true,
           zoomControl: true,
+          mapTypeControl: false,
         }}
-      >
-        {Object.entries(locationGroups).map(([key, locationPhotos]) => (
-          <Marker
-            key={key}
-            position={{ lat: locationPhotos[0].lat!, lng: locationPhotos[0].lng! }}
-            onClick={() => setSelectedLocation(locationPhotos)}
-            icon={{
-              url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(
-                `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
-                  <circle cx="20" cy="20" r="18" fill="#f43f5e" stroke="white" stroke-width="3"/>
-                  <text x="20" y="25" text-anchor="middle" fill="white" font-size="14" font-weight="bold">${locationPhotos.length}</text>
-                </svg>`
-              ),
-              scaledSize: new window.google.maps.Size(40, 40),
-            }}
-          />
-        ))}
-      </GoogleMap>
+      />
 
-      {selectedLocation && (
-        <div className="absolute bottom-4 left-4 right-4 bg-white/95 backdrop-blur-xl rounded-2xl p-4 shadow-xl max-h-64 overflow-auto">
-          <div className="flex items-center justify-between mb-3">
-            <h4 className="font-bold text-rose-800">{selectedLocation[0].location}</h4>
-            <button 
-              onClick={() => setSelectedLocation(null)}
-              className="p-1 hover:bg-rose-100 rounded-full"
+      {/* render markers via Google Maps API (AdvancedMarkerElement when available) */}
+      {isLoaded && mapRef.current && Object.entries(locationGroups).map(([key, locationPhotos]) => {
+        const existing = markersRef.current[key];
+        const pos = { lat: locationPhotos[0].lat!, lng: locationPhotos[0].lng! };
+
+        // create/update marker when missing
+        if (!existing) {
+          const count = locationPhotos.length;
+          const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 48 48'>
+            <circle cx='24' cy='18' r='16' fill='#f43f5e' stroke='white' stroke-width='3'/>
+            <text x='24' y='24' text-anchor='middle' fill='white' font-size='14' font-weight='bold'>${count}</text>
+          </svg>`;
+
+          // prefer AdvancedMarkerElement (new), fall back to classic Marker
+          if ((window as any).google?.maps?.marker?.AdvancedMarkerElement) {
+            const content = document.createElement('div');
+            content.innerHTML = svg;
+            content.style.cursor = 'pointer';
+            // attach click to the DOM content — more reliable than gmp-click
+            content.addEventListener('click', (e) => { e.stopPropagation(); setSelectedLocation(locationPhotos); });
+            const AdvMarker = (window as any).google.maps.marker.AdvancedMarkerElement;
+            const m = new AdvMarker({ position: pos, map: mapRef.current, content });
+            markersRef.current[key] = m;
+          } else {
+            const m = new (window as any).google.maps.Marker({ position: pos, map: mapRef.current, title: `${locationPhotos.length}` });
+            m.addListener('click', () => setSelectedLocation(locationPhotos));
+            markersRef.current[key] = m;
+          }
+        } else {
+          // update position if changed
+          try { existing.setPosition?.(pos); } catch {}
+        }
+
+        return null;
+      })}
+
+      {/* remove markers when they disappear from the locationGroups */}
+      {isLoaded && mapRef.current && (
+        (() => {
+          const present = new Set(Object.keys(locationGroups));
+          Object.keys(markersRef.current).forEach(k => {
+            if (!present.has(k)) {
+              try { markersRef.current[k].setMap?.(null); } catch {}
+              delete markersRef.current[k];
+            }
+          });
+          return null;
+        })()
+      )}
+
+      {/* Location gallery dialog */}
+      <Dialog open={!!selectedLocation} onOpenChange={() => setSelectedLocation(null)}>
+        <DialogContent className="max-w-4xl p-0 overflow-hidden bg-white/95 backdrop-blur-xl border-rose-200" aria-describedby={undefined}>
+          <DialogTitle className="sr-only">
+            Photos at {selectedLocation?.[0]?.location || 'this location'}
+          </DialogTitle>
+          {selectedLocation && (
+            <LocationGallery photos={selectedLocation} onPhotoClick={(photo) => { setSelectedLocation(null); onPhotoClick(photo); }} />
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+// Gallery view for a group of photos at one map location
+function LocationGallery({ photos, onPhotoClick }: { photos: Photo[]; onPhotoClick: (photo: Photo) => void }) {
+  const [activeIdx, setActiveIdx] = useState(0);
+  const active = photos[activeIdx];
+
+  // keyboard navigation
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft') setActiveIdx(i => (i - 1 + photos.length) % photos.length);
+      if (e.key === 'ArrowRight') setActiveIdx(i => (i + 1) % photos.length);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [photos.length]);
+
+  return (
+    <div className="flex flex-col">
+      {/* Main preview */}
+      <div className="relative aspect-video bg-black/5 cursor-pointer" onClick={() => onPhotoClick(active)}>
+        <img
+          src={active.src}
+          alt={active.title}
+          className="w-full h-full object-cover transition-opacity duration-300"
+        />
+        {active.favorite && (
+          <div className="absolute top-4 right-4 bg-rose-500 rounded-full p-2 shadow-lg">
+            <Star className="w-5 h-5 text-white fill-current" />
+          </div>
+        )}
+
+        {/* Prev / Next arrows (only when > 1 photo) */}
+        {photos.length > 1 && (
+          <>
+            <button
+              onClick={(e) => { e.stopPropagation(); setActiveIdx(i => (i - 1 + photos.length) % photos.length); }}
+              className="absolute left-3 top-1/2 -translate-y-1/2 w-10 h-10 bg-white/80 backdrop-blur rounded-full flex items-center justify-center shadow hover:bg-white transition-all"
             >
-              <X className="w-5 h-5 text-rose-500" />
+              <ChevronLeft className="w-5 h-5 text-rose-600" />
             </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); setActiveIdx(i => (i + 1) % photos.length); }}
+              className="absolute right-3 top-1/2 -translate-y-1/2 w-10 h-10 bg-white/80 backdrop-blur rounded-full flex items-center justify-center shadow hover:bg-white transition-all"
+            >
+              <ChevronRight className="w-5 h-5 text-rose-600" />
+            </button>
+          </>
+        )}
+
+        {/* Counter badge */}
+        {photos.length > 1 && (
+          <div className="absolute bottom-3 right-3 bg-black/50 text-white text-xs px-2.5 py-1 rounded-full backdrop-blur">
+            {activeIdx + 1} / {photos.length}
           </div>
-          <div className="flex gap-3 overflow-x-auto pb-2">
-            {selectedLocation.map(photo => (
-              <div 
-                key={photo.id}
-                onClick={() => onPhotoClick(photo)}
-                className="flex-shrink-0 w-24 cursor-pointer group"
-              >
-                <img 
-                  src={photo.src} 
-                  alt={photo.title}
-                  className="w-24 h-24 object-cover rounded-xl group-hover:ring-2 ring-rose-500 transition-all"
-                />
-                <p className="text-xs text-rose-600 mt-1 truncate">{photo.title}</p>
-              </div>
-            ))}
-          </div>
+        )}
+      </div>
+
+      {/* Info panel */}
+      <div className="p-6">
+        <div className="flex items-center gap-3 mb-2 text-rose-500">
+          <Calendar className="w-5 h-5" />
+          <span className="font-medium">{new Date(active.date).toLocaleDateString()}</span>
+        </div>
+        <h3 className="text-2xl font-bold text-rose-800 mb-2">{active.title}</h3>
+        <div className="flex items-center gap-2 text-rose-600/70 mb-3">
+          <MapPin className="w-5 h-5" />
+          <span>{active.location}</span>
+        </div>
+        {active.description && (
+          <p className="text-rose-700/80 leading-relaxed">{active.description}</p>
+        )}
+      </div>
+
+      {/* Thumbnail strip (only when > 1 photo) */}
+      {photos.length > 1 && (
+        <div className="px-6 pb-5 flex gap-2 overflow-x-auto">
+          {photos.map((photo, idx) => (
+            <button
+              key={photo.id}
+              onClick={() => setActiveIdx(idx)}
+              className={`flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border-2 transition-all ${
+                idx === activeIdx ? 'border-rose-500 ring-2 ring-rose-300 scale-105' : 'border-transparent opacity-60 hover:opacity-100'
+              }`}
+            >
+              <img src={photo.src} alt={photo.title} className="w-full h-full object-cover" />
+            </button>
+          ))}
         </div>
       )}
     </div>
@@ -1363,35 +1789,28 @@ function App() {
         const { data: milestonesData, error: milestonesError } = await supabase
           .from('milestones')
           .select('*')
-          .order('sort_order', { ascending: true });
-        if (!milestonesError && mounted && milestonesData) setRemoteMilestones(milestonesData as Milestone[]);
-
-        // prefer dedicated `anniversaries` table (new); fall back to `site_settings` (legacy)
-        try {
-          const { data: annData, error: annErr } = await supabase.from('anniversaries').select('start_date').limit(1).maybeSingle();
-          if (!annErr && annData?.start_date && mounted) {
-            setRelationshipStartDate(new Date(annData.start_date));
-          } else {
-            const { data: settingsData, error: settingsError } = await supabase
-              .from('site_settings')
-              .select('value')
-              .eq('key', 'relationship_start_date')
-              .maybeSingle();
-            if (!settingsError && mounted && settingsData?.value?.date) {
-              setRelationshipStartDate(new Date(settingsData.value.date));
-            }
-          }
-        } catch (err) {
-          console.warn('failed to read anniversaries table, falling back to site_settings', err);
-          const { data: settingsData, error: settingsError } = await supabase
-            .from('site_settings')
-            .select('value')
-            .eq('key', 'relationship_start_date')
-            .maybeSingle();
-          if (!settingsError && mounted && settingsData?.value?.date) {
-            setRelationshipStartDate(new Date(settingsData.value.date));
-          }
+          .order('event_date', { ascending: false });
+        if (!milestonesError && mounted && milestonesData) {
+          setRemoteMilestones((milestonesData as any[]).map(m => ({
+            id: m.id,
+            date: m.event_date,
+            title: m.title,
+            description: m.description,
+            icon: iconFromName(m.icon_name),
+            icon_name: m.icon_name,
+          })));
         }
+
+        // read legacy `site_settings` first (avoids requesting a table that may not exist in older DBs)
+        const { data: settingsData, error: settingsError } = await supabase
+          .from('site_settings')
+          .select('value')
+          .eq('key', 'relationship_start_date')
+          .maybeSingle();
+        if (!settingsError && mounted && settingsData?.value?.date) {
+          setRelationshipStartDate(new Date(settingsData.value.date));
+        }
+        // No longer querying the `anniversaries` table — all date storage now uses site_settings.
       } catch (err) {
         console.error('loadFromDb error', err);
       } finally {
@@ -1446,6 +1865,8 @@ function App() {
           onClose={() => setShowAdmin(false)}
           relationshipStartDate={relationshipStartDate}
           onUpdateRelationshipStartDate={(d: Date) => setRelationshipStartDate(d)}
+          milestones={remoteMilestones}
+          onUpdateMilestones={setRemoteMilestones}
         />
       )}
 
@@ -1541,7 +1962,13 @@ function App() {
               <MapPin className="w-6 h-6" />
               Where Our Memories Were Made
             </h3>
-            <PhotoMap photos={photos} onPhotoClick={setSelectedPhoto} />
+            {import.meta.env.VITE_GOOGLE_MAPS_API_KEY ? (
+              <PhotoMap photos={photos} onPhotoClick={setSelectedPhoto} />
+            ) : (
+              <div className="w-full h-96 bg-rose-50 rounded-3xl flex items-center justify-center text-rose-500/80">
+                Map disabled — set `VITE_GOOGLE_MAPS_API_KEY` to enable the interactive map.
+              </div>
+            )}
           </div>
 
           {/* Infinite Drag Carousel */}
@@ -1568,13 +1995,20 @@ function App() {
           </div>
 
           <div className="relative">
-            <div className="absolute left-6 md:left-1/2 top-0 bottom-0 w-0.5 bg-gradient-to-b from-rose-300 via-pink-400 to-rose-300 md:-translate-x-1/2" />
+            {/* Only show the vertical timeline line when milestones exist */}
+            {remoteMilestones && remoteMilestones.length > 0 && (
+              <div className="absolute left-6 md:left-1/2 top-0 bottom-0 w-0.5 bg-gradient-to-b from-rose-300 via-pink-400 to-rose-300 md:-translate-x-1/2" />
+            )}
 
             {isLoadingRemote && (
               <div className="w-full text-center text-sm text-rose-500 mb-6">Loading milestones…</div>
             )}
 
-            {remoteMilestones.map((milestone, index) => (
+            {(!remoteMilestones || remoteMilestones.length === 0) && !isLoadingRemote && (
+              <div className="w-full text-center text-rose-500/80 py-12">No milestones yet — add one via the Admin Panel.</div>
+            )}
+
+            {(remoteMilestones && remoteMilestones.length > 0) && remoteMilestones.map((milestone, index) => (
               <div
                 key={milestone.id}
                 className={`relative flex items-start gap-8 mb-12 ${
@@ -1586,7 +2020,7 @@ function App() {
                 }`}>
                   <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-rose-100 hover:shadow-xl transition-shadow">
                     <span className="text-rose-500 font-medium text-sm mb-2 block">
-                      {milestone.date}
+                      {milestone.date ? new Date(milestone.date + 'T00:00:00').toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : ''}
                     </span>
                     <h3 className="text-xl font-bold text-rose-800 mb-3">
                       {milestone.title}
@@ -1630,7 +2064,7 @@ function App() {
 
       {/* Photo Detail Dialog */}
       <Dialog open={!!selectedPhoto} onOpenChange={() => setSelectedPhoto(null)}>
-        <DialogContent className="max-w-3xl p-0 overflow-hidden bg-white/95 backdrop-blur-xl border-rose-200">
+        <DialogContent className="max-w-3xl p-0 overflow-hidden bg-white/95 backdrop-blur-xl border-rose-200" aria-describedby={undefined}>
           <DialogTitle className="sr-only">
             {selectedPhoto?.title || 'Photo Details'}
           </DialogTitle>
