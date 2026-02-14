@@ -13,7 +13,7 @@ import { GoogleMap, useJsApiLoader } from '@react-google-maps/api';
 // Photo data structure
 interface Photo {
   id: number;
-  src: string; // runtime URL used for <img> (may be signed URL)
+  src?: string; // runtime URL used for <img> (may be signed URL) - generated at runtime, not persisted
   storage_path?: string | null; // path in private `photos` bucket when uploaded
   title: string;
   date: string;
