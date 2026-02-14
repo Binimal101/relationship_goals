@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
+    "test:e2e": "node scripts/e2e-admin-upload.js",
     "start": "npm run build && vite preview --host --port 4173"
   },
   "dependencies": {
