@@ -3,6 +3,7 @@ import { Heart, Calendar, Camera, MapPin, Star, Clock, Lock, Settings, Plus, Tra
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { supabase } from '@/lib/supabase';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -30,20 +31,20 @@ interface Milestone {
   icon: React.ReactNode;
 }
 
-// Auth questions
+// Auth questions (no plaintext answers — now stored hashed in DB)
 interface AuthQuestion {
-  id: string;
+  id: string; // corresponds to `key` in DB
   label: string;
-  placeholder: string;
-  answer: string;
+  placeholder?: string;
   type: 'date' | 'text';
 }
 
-const authQuestions: AuthQuestion[] = [
-  { id: 'hisBirthday', label: 'His Birthday', placeholder: 'MM/DD/YYYY', answer: '02/25/2005', type: 'date' },
-  { id: 'herBirthday', label: 'Her Birthday', placeholder: 'MM/DD/YYYY', answer: '01/10/2001', type: 'date' },
-  { id: 'anniversary', label: 'Our Anniversary', placeholder: 'MM/DD/YYYY', answer: '03/24/2025', type: 'date' },
-  { id: 'firstPlace', label: 'The First Place We Went To', placeholder: 'Enter the place...', answer: 'wawa', type: 'text' },
+// local fallback (labels/placeholders only) — answers are NOT stored here
+const fallbackAuthQuestions: AuthQuestion[] = [
+  { id: 'hisBirthday', label: 'His Birthday', placeholder: 'MM/DD/YYYY', type: 'date' },
+  { id: 'herBirthday', label: 'Her Birthday', placeholder: 'MM/DD/YYYY', type: 'date' },
+  { id: 'anniversary', label: 'Our Anniversary', placeholder: 'MM/DD/YYYY', type: 'date' },
+  { id: 'firstPlace', label: 'The First Place We Went To', placeholder: 'Enter the place...', type: 'text' },
 ];
 
 // Sample photos data with coordinates
@@ -211,39 +212,67 @@ function AuthPage({ onAuthSuccess }: { onAuthSuccess: () => void }) {
   const [error, setError] = useState('');
   const [isChecking, setIsChecking] = useState(false);
 
+  const [questions, setQuestions] = useState<AuthQuestion[] | null>(null);
+  const [loadingQuestions, setLoadingQuestions] = useState<boolean>(true);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      setLoadingQuestions(true);
+      try {
+        const { data, error } = await supabase
+          .from('admin_auth_questions')
+          .select('key, label, placeholder, type')
+          .order('key', { ascending: true });
+        if (error || !data) {
+          console.warn('failed to load admin_auth_questions from DB, using fallback', error);
+          if (mounted) setQuestions(fallbackAuthQuestions);
+        } else {
+          const mapped = (data as any[]).map(r => ({ id: r.key, label: r.label, placeholder: r.placeholder, type: r.type }));
+          if (mounted) setQuestions(mapped);
+        }
+      } catch (err) {
+        console.error('load admin questions error', err);
+        if (mounted) setQuestions(fallbackAuthQuestions);
+      } finally {
+        if (mounted) setLoadingQuestions(false);
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
+
   const handleInputChange = (id: string, value: string, type: string) => {
     let formattedValue = value;
-    
-    // Auto-format date inputs
-    if (type === 'date') {
-      formattedValue = formatDateInput(value);
-    }
-    
+    if (type === 'date') formattedValue = formatDateInput(value);
     setAnswers(prev => ({ ...prev, [id]: formattedValue }));
     setError('');
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
+    if (!questions) return;
     setIsChecking(true);
-    
-    // Check all answers
-    const allCorrect = authQuestions.every(q => {
-      const userAnswer = (answers[q.id] || '').toLowerCase().trim();
-      const correctAnswer = q.answer.toLowerCase().trim();
-      return userAnswer === correctAnswer;
-    });
 
-    setTimeout(() => {
-      if (allCorrect) {
+    // verify answers server-side via RPC (no plaintext stored in client)
+    try {
+      const { data, error } = await supabase.rpc('verify_admin_answers', { answers });
+      const ok = data === true || (Array.isArray(data) && data[0] === true);
+      if (error) {
+        console.error('verify_admin_answers rpc error', error);
+        setError('Verification failed — please try again.');
+      } else if (ok) {
         onAuthSuccess();
       } else {
-        setError('Some answers don\'t match our memories... Try again! 💕');
+        setError("Some answers don't match our memories... Try again! 💕");
       }
+    } catch (err) {
+      console.error('verification exception', err);
+      setError('Verification failed — please try again.');
+    } finally {
       setIsChecking(false);
-    }, 800);
+    }
   };
 
-  const isComplete = authQuestions.every(q => answers[q.id]?.trim());
+  const isComplete = (questions ?? fallbackAuthQuestions).every(q => answers[q.id]?.trim());
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-rose-100 via-pink-100 to-rose-200 flex items-center justify-center p-6">
@@ -325,15 +354,39 @@ function AdminPanel({
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [isGeocoding, setIsGeocoding] = useState(false);
 
-  const handleSave = () => {
-    onUpdatePhotos(localPhotos);
-    onClose();
+  const handleSave = async () => {
+    // Persist localPhotos to Supabase (upsert) then close
+    try {
+      const { data, error } = await supabase.from('photos').upsert(localPhotos).select();
+      if (error) {
+        console.error('Failed to upsert photos:', error);
+        // still update UI locally
+        onUpdatePhotos(localPhotos);
+      } else if (data) {
+        setLocalPhotos(data as Photo[]);
+        onUpdatePhotos(data as Photo[]);
+      }
+    } catch (err) {
+      console.error(err);
+      onUpdatePhotos(localPhotos);
+    } finally {
+      onClose();
+    }
   };
 
-  const handleDelete = (id: number) => {
-    setLocalPhotos(prev => prev.filter(p => p.id !== id));
+  const handleDelete = async (id: number) => {
+    // delete from DB and update local state
+    try {
+      const { error } = await supabase.from('photos').delete().eq('id', id);
+      if (error) console.error('delete error', error);
+      setLocalPhotos(prev => prev.filter(p => p.id !== id));
+    } catch (err) {
+      console.error(err);
+      setLocalPhotos(prev => prev.filter(p => p.id !== id));
+    }
   };
 
   const handleEdit = (photo: Photo) => {
@@ -341,9 +394,45 @@ function AdminPanel({
     setUploadedImage(photo.src);
   };
 
-  const handleSaveEdit = () => {
-    if (editingPhoto) {
-      setLocalPhotos(prev => prev.map(p => p.id === editingPhoto.id ? editingPhoto : p));
+  const handleSaveEdit = async () => {
+    if (!editingPhoto) return;
+
+    // if a file was selected, try uploading to storage first
+    let finalSrc = editingPhoto.src;
+    if (uploadedFile) {
+      try {
+        const filePath = `${Date.now()}_${uploadedFile.name}`;
+        const { error: uploadErr } = await supabase.storage.from('photos').upload(filePath, uploadedFile, { upsert: true });
+        if (!uploadErr) {
+          const { data: signedUrlData, error: signedErr } = await supabase.storage.from('photos').createSignedUrl(filePath, 60 * 60);
+          if (!signedErr && signedUrlData?.signedUrl) {
+            finalSrc = signedUrlData.signedUrl;
+          } else {
+            console.warn('createSignedUrl failed', signedErr);
+          }
+        } else {
+          console.warn('storage upload failed', uploadErr);
+        }
+      } catch (err) {
+        console.warn('storage upload exception', err);
+      }
+    }
+
+    const toUpsert = { ...editingPhoto, src: finalSrc };
+
+    try {
+      const { data, error } = await supabase.from('photos').upsert(toUpsert).select();
+      if (error) {
+        console.error('save edit error', error);
+        setLocalPhotos(prev => prev.map(p => p.id === editingPhoto.id ? editingPhoto : p));
+      } else {
+        const updated = Array.isArray(data) ? data[0] : data;
+        setLocalPhotos(prev => prev.map(p => p.id === (updated as any).id ? (updated as Photo) : p));
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setUploadedFile(null);
       setEditingPhoto(null);
       setUploadedImage(null);
     }
@@ -364,10 +453,45 @@ function AdminPanel({
     setIsAdding(true);
   };
 
-  const handleSaveNew = () => {
-    if (editingPhoto && uploadedImage) {
-      const photoWithImage = { ...editingPhoto, src: uploadedImage };
-      setLocalPhotos(prev => [...prev, photoWithImage]);
+  const handleSaveNew = async () => {
+    if (!editingPhoto || !uploadedImage) return;
+
+    // attempt to upload file to storage if available
+    let finalSrc = uploadedImage;
+    if (uploadedFile) {
+      try {
+        const filePath = `${Date.now()}_${uploadedFile.name}`;
+        const { error: uploadErr } = await supabase.storage.from('photos').upload(filePath, uploadedFile, { upsert: true });
+        if (!uploadErr) {
+          const { data: signedUrlData, error: signedErr } = await supabase.storage.from('photos').createSignedUrl(filePath, 60 * 60);
+          if (!signedErr && signedUrlData?.signedUrl) finalSrc = signedUrlData.signedUrl;
+          else console.warn('createSignedUrl failed', signedErr);
+        } else {
+          console.warn('storage upload failed', uploadErr);
+        }
+      } catch (err) {
+        console.warn('storage upload error', err);
+      }
+    }
+
+    const photoToInsert = { ...editingPhoto, src: finalSrc };
+    try {
+      const { data, error } = await supabase.from('photos').insert(photoToInsert).select();
+      if (error) {
+        console.error('insert error', error);
+        setLocalPhotos(prev => [...prev, photoToInsert]);
+        onUpdatePhotos([...localPhotos, photoToInsert]);
+      } else {
+        const inserted = Array.isArray(data) ? data[0] : data;
+        setLocalPhotos(prev => [...prev, inserted as Photo]);
+        onUpdatePhotos([...localPhotos, inserted as Photo]);
+      }
+    } catch (err) {
+      console.error(err);
+      setLocalPhotos(prev => [...prev, photoToInsert]);
+      onUpdatePhotos([...localPhotos, photoToInsert]);
+    } finally {
+      setUploadedFile(null);
       setEditingPhoto(null);
       setUploadedImage(null);
       setIsAdding(false);
@@ -390,15 +514,23 @@ function AdminPanel({
     setDraggedIndex(index);
   };
 
-  const toggleFavorite = (id: number) => {
-    setLocalPhotos(prev => prev.map(p => 
-      p.id === id ? { ...p, favorite: !p.favorite } : p
-    ));
+  const toggleFavorite = async (id: number) => {
+    setLocalPhotos(prev => prev.map(p => p.id === id ? { ...p, favorite: !p.favorite } : p));
+    const photo = localPhotos.find(p => p.id === id);
+    try {
+      if (photo) {
+        const { error } = await supabase.from('photos').update({ favorite: !photo.favorite }).eq('id', id);
+        if (error) console.error('toggleFavorite error', error);
+      }
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      setUploadedFile(file);
       const reader = new FileReader();
       reader.onloadend = () => {
         const result = reader.result as string;
@@ -989,6 +1121,52 @@ function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [showAdmin, setShowAdmin] = useState(false);
 
+  // dynamic milestones (fallback to static `milestones` constant)
+  const [remoteMilestones, setRemoteMilestones] = useState<Milestone[]>(milestones);
+  const [relationshipStartDate, setRelationshipStartDate] = useState<Date | null>(new Date('2023-01-15'));
+  const [isLoadingRemote, setIsLoadingRemote] = useState<boolean>(false);
+
+  useEffect(() => {
+    setIsVisible(true);
+  }, []);
+
+  // READ-ONLY: fetch persisted data from Supabase (photos, milestones, site_settings)
+  useEffect(() => {
+    let mounted = true;
+    async function loadFromDb() {
+      setIsLoadingRemote(true);
+      try {
+        const { data: photosData, error: photosError } = await supabase
+          .from('photos')
+          .select('*')
+          .order('id', { ascending: true });
+        if (photosError) console.error('supabase.photos.select error', photosError);
+        else if (mounted && photosData) setPhotos(photosData as Photo[]);
+
+        const { data: milestonesData, error: milestonesError } = await supabase
+          .from('milestones')
+          .select('*')
+          .order('sort_order', { ascending: true });
+        if (!milestonesError && mounted && milestonesData) setRemoteMilestones(milestonesData as Milestone[]);
+
+        const { data: settingsData, error: settingsError } = await supabase
+          .from('site_settings')
+          .select('value')
+          .eq('key', 'relationship_start_date')
+          .maybeSingle();
+        if (!settingsError && mounted && settingsData?.value?.date) {
+          setRelationshipStartDate(new Date(settingsData.value.date));
+        }
+      } catch (err) {
+        console.error('loadFromDb error', err);
+      } finally {
+        if (mounted) setIsLoadingRemote(false);
+      }
+    }
+    loadFromDb();
+    return () => { mounted = false; };
+  }, []);
+
   useEffect(() => {
     setIsVisible(true);
   }, []);
@@ -1074,10 +1252,10 @@ function App() {
           
           <div className="flex items-center justify-center gap-4 mt-8 text-rose-600/70">
             <Calendar className="w-5 h-5" />
-            <span className="text-lg">Since January 15, 2023</span>
+            <span className="text-lg">{relationshipStartDate ? `Since ${relationshipStartDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}` : 'Since January 15, 2023'}</span>
           </div>
 
-          <TimeTogether startDate={new Date('2023-01-15')} />
+          <TimeTogether startDate={relationshipStartDate ?? new Date('2023-01-15')} />
 
           <div className="mt-12 flex flex-col sm:flex-row gap-4 justify-center">
             <Button 
