@@ -602,7 +602,7 @@ function AdminPanel({
 
   const handleEdit = (photo: Photo) => {
     setEditingPhoto({ ...photo });
-    setUploadedImage(photo.src);
+    setUploadedImage(photo.src ?? null);
   };
 
   const handleSaveEdit = async () => {
