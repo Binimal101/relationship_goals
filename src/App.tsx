@@ -12,7 +12,8 @@ import { GoogleMap, useJsApiLoader, Marker } from '@react-google-maps/api';
 // Photo data structure
 interface Photo {
   id: number;
-  src: string;
+  src: string; // runtime URL used for <img> (may be signed URL)
+  storage_path?: string | null; // path in private `photos` bucket when uploaded
   title: string;
   date: string;
   location: string;
@@ -215,17 +216,24 @@ function AuthPage({ onAuthSuccess }: { onAuthSuccess: () => void }) {
   const [questions, setQuestions] = useState<AuthQuestion[] | null>(null);
   const [loadingQuestions, setLoadingQuestions] = useState<boolean>(true);
 
+  // sign-in state
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [signingIn, setSigningIn] = useState(false);
+  const [signInError, setSignInError] = useState('');
+  const [user, setUser] = useState<any | null>(null);
+
   useEffect(() => {
     let mounted = true;
     (async () => {
       setLoadingQuestions(true);
       try {
         const { data, error } = await supabase
-          .from('admin_auth_questions')
-          .select('key, label, placeholder, type')
+          .from('admin_auth_questions_public')
+          .select('*')
           .order('key', { ascending: true });
         if (error || !data) {
-          console.warn('failed to load admin_auth_questions from DB, using fallback', error);
+          console.warn('failed to load admin_auth_questions_public from DB, using fallback', error);
           if (mounted) setQuestions(fallbackAuthQuestions);
         } else {
           const mapped = (data as any[]).map(r => ({ id: r.key, label: r.label, placeholder: r.placeholder, type: r.type }));
@@ -238,7 +246,19 @@ function AuthPage({ onAuthSuccess }: { onAuthSuccess: () => void }) {
         if (mounted) setLoadingQuestions(false);
       }
     })();
-    return () => { mounted = false; };
+
+    // keep local auth state in sync
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (session?.user) setUser(session.user);
+      if (event === 'SIGNED_OUT') setUser(null);
+    });
+
+    (async () => {
+      const { data } = await supabase.auth.getUser();
+      if (data?.user) setUser(data.user);
+    })();
+
+    return () => { mounted = false; listener?.subscription.unsubscribe(); };
   }, []);
 
   const handleInputChange = (id: string, value: string, type: string) => {
@@ -248,9 +268,38 @@ function AuthPage({ onAuthSuccess }: { onAuthSuccess: () => void }) {
     setError('');
   };
 
+  const signIn = async () => {
+    setSigningIn(true);
+    setSignInError('');
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      if (data?.user) setUser(data.user);
+    } catch (err: any) {
+      setSignInError(err?.message || 'Sign-in failed');
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
+  const signOut = async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+  };
+
   const handleSubmit = async () => {
     if (!questions) return;
     setIsChecking(true);
+    setError('');
+
+    // require sign-in first
+    const { data: currentUser } = await supabase.auth.getUser();
+    const signedInUser = currentUser?.user ?? user;
+    if (!signedInUser) {
+      setError('You must sign in with your admin account before answering the security questions.');
+      setIsChecking(false);
+      return;
+    }
 
     // verify answers server-side via RPC (no plaintext stored in client)
     try {
@@ -259,11 +308,47 @@ function AuthPage({ onAuthSuccess }: { onAuthSuccess: () => void }) {
       if (error) {
         console.error('verify_admin_answers rpc error', error);
         setError('Verification failed — please try again.');
-      } else if (ok) {
-        onAuthSuccess();
-      } else {
-        setError("Some answers don't match our memories... Try again! 💕");
+        setIsChecking(false);
+        return;
       }
+      if (!ok) {
+        setError("Some answers don't match our memories... Try again! 💕");
+        setIsChecking(false);
+        return;
+      }
+
+      // answers OK — now check admin membership
+      const { data: existingAdmin, error: adminErr } = await supabase.from('admins').select('id').eq('id', signedInUser.id).maybeSingle();
+      if (adminErr) {
+        console.error('admins.select error', adminErr);
+        setError('Authorization check failed.');
+        setIsChecking(false);
+        return;
+      }
+
+      if (existingAdmin) {
+        onAuthSuccess();
+        setIsChecking(false);
+        return;
+      }
+
+      // bootstrap: if no admins exist, make this user the first admin
+      const { data: anyAdminRows } = await supabase.from('admins').select('id').limit(1);
+      if (!anyAdminRows || anyAdminRows.length === 0) {
+        const { error: insertErr } = await supabase.from('admins').insert({ id: signedInUser.id });
+        if (insertErr) {
+          console.error('failed to insert initial admin', insertErr);
+          setError('Could not create admin record.');
+          setIsChecking(false);
+          return;
+        }
+        onAuthSuccess();
+        setIsChecking(false);
+        return;
+      }
+
+      // user is not an admin
+      setError('This account is not authorized as an admin. Ask an existing admin to add you.');
     } catch (err) {
       console.error('verification exception', err);
       setError('Verification failed — please try again.');
@@ -272,7 +357,7 @@ function AuthPage({ onAuthSuccess }: { onAuthSuccess: () => void }) {
     }
   };
 
-  const isComplete = (questions ?? fallbackAuthQuestions).every(q => answers[q.id]?.trim());
+  const isComplete = (questions ?? fallbackAuthQuestions).every(q => answers[q.id]?.trim()) && !!user;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-rose-100 via-pink-100 to-rose-200 flex items-center justify-center p-6">
@@ -288,25 +373,60 @@ function AuthPage({ onAuthSuccess }: { onAuthSuccess: () => void }) {
             <p className="text-rose-600/70">Prove it's really you... ❤️</p>
           </div>
 
-          <div className="space-y-5">
-            {authQuestions.map((q, index) => (
-              <div key={q.id} className="space-y-2">
-                <Label className="text-rose-700 font-medium flex items-center gap-2">
-                  <span className="w-6 h-6 bg-rose-100 rounded-full flex items-center justify-center text-xs text-rose-600 font-bold">
-                    {index + 1}
-                  </span>
-                  {q.label}
-                </Label>
-                <Input
-                  type="text"
-                  placeholder={q.placeholder}
-                  value={answers[q.id] || ''}
-                  maxLength={q.type === 'date' ? 10 : undefined}
-                  onChange={(e) => handleInputChange(q.id, e.target.value, q.type)}
-                  className="border-rose-200 focus:border-rose-400 focus:ring-rose-400 rounded-xl"
-                />
+          {/* Sign-in with email + password (required) */}
+          <div className="space-y-4">
+            {!user ? (
+              <div className="grid grid-cols-1 gap-3">
+                <div>
+                  <Label>Email</Label>
+                  <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@domain.com" />
+                </div>
+                <div>
+                  <Label>Password</Label>
+                  <Input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder="••••••••" />
+                </div>
+                {signInError && <div className="text-sm text-rose-600">{signInError}</div>}
+                <div className="flex gap-3">
+                  <Button onClick={signIn} disabled={!email || !password || signingIn} className="flex-1 bg-rose-500 text-white">
+                    {signingIn ? 'Signing in…' : 'Sign in'}
+                  </Button>
+                  <Button variant="outline" onClick={() => { setEmail(''); setPassword(''); }} className="flex-1">Clear</Button>
+                </div>
+                <div className="text-xs text-rose-500">You must sign in with your admin account and then answer the security questions to unlock the admin panel.</div>
               </div>
-            ))}
+            ) : (
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm text-rose-600">Signed in as <strong className="ml-1">{user.email}</strong></div>
+                <div className="flex gap-2">
+                  <Button variant="ghost" onClick={signOut}>Sign out</Button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="mt-4 space-y-5">
+            {loadingQuestions ? (
+              <div className="text-center text-sm text-rose-500">Loading questions…</div>
+            ) : (
+              (questions ?? fallbackAuthQuestions).map((q, index) => (
+                <div key={q.id} className="space-y-2">
+                  <Label className="text-rose-700 font-medium flex items-center gap-2">
+                    <span className="w-6 h-6 bg-rose-100 rounded-full flex items-center justify-center text-xs text-rose-600 font-bold">
+                      {index + 1}
+                    </span>
+                    {q.label}
+                  </Label>
+                  <Input
+                    type="text"
+                    placeholder={q.placeholder}
+                    value={answers[q.id] || ''}
+                    maxLength={q.type === 'date' ? 10 : undefined}
+                    onChange={(e) => handleInputChange(q.id, e.target.value, q.type)}
+                    className="border-rose-200 focus:border-rose-400 focus:ring-rose-400 rounded-xl"
+                  />
+                </div>
+              ))
+            )}
           </div>
 
           {error && (
@@ -356,6 +476,7 @@ function AdminPanel({
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [isGeocoding, setIsGeocoding] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   const handleSave = async () => {
     // Persist localPhotos to Supabase (upsert) then close
@@ -378,8 +499,18 @@ function AdminPanel({
   };
 
   const handleDelete = async (id: number) => {
-    // delete from DB and update local state
+    // delete from DB and delete object from storage when present
     try {
+      const photo = localPhotos.find(p => p.id === id);
+      if (photo?.storage_path) {
+        try {
+          const { error: delErr } = await supabase.storage.from('photos').remove([photo.storage_path]);
+          if (delErr) console.warn('storage remove error', delErr);
+        } catch (err) {
+          console.warn('storage remove exception', err);
+        }
+      }
+
       const { error } = await supabase.from('photos').delete().eq('id', id);
       if (error) console.error('delete error', error);
       setLocalPhotos(prev => prev.filter(p => p.id !== id));
@@ -397,7 +528,7 @@ function AdminPanel({
   const handleSaveEdit = async () => {
     if (!editingPhoto) return;
 
-    // if a file was selected, try uploading to storage first
+    // try uploading file to storage first (if provided)
     let finalSrc = editingPhoto.src;
     if (uploadedFile) {
       try {
@@ -405,20 +536,20 @@ function AdminPanel({
         const { error: uploadErr } = await supabase.storage.from('photos').upload(filePath, uploadedFile, { upsert: true });
         if (!uploadErr) {
           const { data: signedUrlData, error: signedErr } = await supabase.storage.from('photos').createSignedUrl(filePath, 60 * 60);
-          if (!signedErr && signedUrlData?.signedUrl) {
-            finalSrc = signedUrlData.signedUrl;
-          } else {
-            console.warn('createSignedUrl failed', signedErr);
-          }
+          if (!signedErr && signedUrlData?.signedUrl) finalSrc = signedUrlData.signedUrl;
+          editingPhoto.storage_path = filePath;
+          setUploadError(null);
         } else {
           console.warn('storage upload failed', uploadErr);
+          setUploadError('Storage upload failed (permission denied). File will be saved as a data-URL until uploads are enabled for admins.');
         }
       } catch (err) {
         console.warn('storage upload exception', err);
+        setUploadError('Storage upload failed (exception). File will be saved as a data-URL until uploads are enabled for admins.');
       }
     }
 
-    const toUpsert = { ...editingPhoto, src: finalSrc };
+    const toUpsert = { ...editingPhoto, src: finalSrc, storage_path: editingPhoto.storage_path };
 
     try {
       const { data, error } = await supabase.from('photos').upsert(toUpsert).select();
@@ -531,6 +662,7 @@ function AdminPanel({
     const file = e.target.files?.[0];
     if (file) {
       setUploadedFile(file);
+      setUploadError(null);
       const reader = new FileReader();
       reader.onloadend = () => {
         const result = reader.result as string;
@@ -692,6 +824,11 @@ function AdminPanel({
                     onChange={handleFileUpload}
                     className="hidden"
                   />
+                  {uploadError && (
+                    <div className="mt-2 text-sm text-amber-700 bg-amber-50 border border-amber-100 p-2 rounded-md">
+                      {uploadError} <strong className="block mt-1">To enable uploads to the private `photos` bucket: sign-in as an authenticated admin or allow storage writes for admins in Supabase.</strong>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1141,7 +1278,22 @@ function App() {
           .select('*')
           .order('id', { ascending: true });
         if (photosError) console.error('supabase.photos.select error', photosError);
-        else if (mounted && photosData) setPhotos(photosData as Photo[]);
+        else if (mounted && photosData) {
+          // resolve signed URLs for any rows that have a storage_path (private files)
+          const resolved = await Promise.all((photosData as any[]).map(async (p) => {
+            if (p.storage_path) {
+              try {
+                const { data: signed, error: signedErr } = await supabase.storage.from('photos').createSignedUrl(p.storage_path, 60 * 60);
+                if (!signedErr && signed?.signedUrl) return { ...p, src: signed.signedUrl };
+              } catch (err) {
+                console.warn('createSignedUrl error', err);
+              }
+              return { ...p, src: p.src };
+            }
+            return p;
+          }));
+          setPhotos(resolved as Photo[]);
+        }
 
         const { data: milestonesData, error: milestonesError } = await supabase
           .from('milestones')
