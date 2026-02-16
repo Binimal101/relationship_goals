@@ -1,0 +1,26 @@
+# Example configuration for admin panel login automation
+# Copy this to config.yaml and fill in your actual credentials
+
+# Email and password for authentication
+email: your-email@example.com
+password: your-password
+
+# Security question answers
+# These correspond to the fallback auth questions in the app
+securityAnswers:
+  hisBirthday: "01/15/1990"      # His Birthday (MM/DD/YYYY)
+  herBirthday: "03/22/1992"      # Her Birthday (MM/DD/YYYY)
+  anniversary: "06/10/2015"      # Our Anniversary (MM/DD/YYYY)
+  firstPlace: "Central Park"     # The First Place We Went To (text)
+
+# Optional: Server configuration
+server:
+  port: 5173                      # Dev server port
+  host: localhost                 # Dev server host
+  timeout: 30000                  # Timeout in ms waiting for server to be ready
+
+# Optional: Browser configuration
+browser:
+  headless: false                 # Always false for manual testing follow-up
+  implicit_wait: 10000            # Implicit wait for elements (ms)
+  page_load_timeout: 30000        # Page load timeout (ms)

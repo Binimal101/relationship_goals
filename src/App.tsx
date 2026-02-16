@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Heart, Calendar, Camera, MapPin, Star, Clock, Lock, Settings, Plus, Trash2, Edit2, GripVertical, X, Check, Upload, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Heart, Calendar, Camera, MapPin, Star, Clock, Lock, Settings, Plus, Trash2, Edit2, GripVertical, X, Check, Upload, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -424,7 +424,7 @@ function AuthPage({ onAuthSuccess }: { onAuthSuccess: () => void }) {
                 </div>
                 {signInError && <div className="text-sm text-rose-600">{signInError}</div>}
                 <div className="flex gap-3">
-                  <Button onClick={signIn} disabled={!email || !password || signingIn} className="flex-1 bg-rose-500 text-white">
+                  <Button data-testid="auth-sign-in" onClick={signIn} disabled={!email || !password || signingIn} className="flex-1 bg-rose-500 text-white">
                     {signingIn ? 'Signing in…' : 'Sign in'}
                   </Button>
                   <Button variant="outline" onClick={() => { setEmail(''); setPassword(''); }} className="flex-1">Clear</Button>
@@ -454,6 +454,7 @@ function AuthPage({ onAuthSuccess }: { onAuthSuccess: () => void }) {
                     {q.label}
                   </Label>
                   <Input
+                    id={q.id}
                     type="text"
                     placeholder={q.placeholder}
                     value={answers[q.id] || ''}
@@ -473,6 +474,7 @@ function AuthPage({ onAuthSuccess }: { onAuthSuccess: () => void }) {
           )}
 
           <Button
+            data-testid="unlock-submit"
             onClick={handleSubmit}
             disabled={!isComplete || isChecking}
             className="w-full mt-6 bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 text-white py-6 rounded-xl font-medium disabled:opacity-50"
@@ -535,6 +537,28 @@ function AdminPanel({
   const [localRelationshipDate, setLocalRelationshipDate] = useState<string>(relationshipStartDate ? relationshipStartDate.toISOString().split('T')[0] : '');
   const [isSavingRelationshipDate, setIsSavingRelationshipDate] = useState(false);
   const [relationshipSaveMsg, setRelationshipSaveMsg] = useState<string | null>(null);
+
+  // Expandable item state
+  const [expandedMilestones, setExpandedMilestones] = useState<Set<number>>(new Set());
+  const [expandedPhotos, setExpandedPhotos] = useState<Set<number>>(new Set());
+
+  const toggleMilestoneExpand = (id: number) => {
+    setExpandedMilestones(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(id)) newSet.delete(id);
+      else newSet.add(id);
+      return newSet;
+    });
+  };
+
+  const togglePhotoExpand = (id: number) => {
+    setExpandedPhotos(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(id)) newSet.delete(id);
+      else newSet.add(id);
+      return newSet;
+    });
+  };
 
   useEffect(() => {
     setLocalRelationshipDate(relationshipStartDate ? relationshipStartDate.toISOString().split('T')[0] : '');
@@ -1015,7 +1039,7 @@ function AdminPanel({
             </div>
 
             {/* ─── Milestones management ─── */}
-            <div className="p-4 bg-white/60 rounded-xl border border-rose-100">
+            <div className="p-4 bg-white/60 rounded-xl border border-rose-100 flex flex-col">
               <div className="flex items-center justify-between mb-3">
                 <div>
                   <h4 className="font-medium text-rose-800">Milestones</h4>
@@ -1033,79 +1057,136 @@ function AdminPanel({
 
               <div className="space-y-2">
                 {localMilestones.map(ms => (
-                  <div key={ms.id} className="flex items-center gap-3 p-3 bg-rose-50/50 rounded-lg border border-rose-100">
-                    <div className="w-8 h-8 bg-gradient-to-br from-rose-400 to-pink-500 rounded-full flex items-center justify-center text-white flex-shrink-0">
-                      {ms.icon}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <h5 className="font-medium text-rose-800 text-sm truncate">{ms.title || '(untitled)'}</h5>
-                      <p className="text-xs text-rose-500 truncate">{ms.date ? new Date(ms.date + 'T00:00:00').toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : ''}</p>
-                    </div>
-                    <div className="flex items-center gap-1 flex-shrink-0">
+                  <div key={ms.id} className="bg-rose-50/50 rounded-lg border border-rose-100 overflow-hidden">
+                    <div className="flex items-center gap-3 p-3">
+                      <div className="w-8 h-8 bg-gradient-to-br from-rose-400 to-pink-500 rounded-full flex items-center justify-center text-white flex-shrink-0">
+                        {ms.icon}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h5 className="font-medium text-rose-800 text-sm truncate">{ms.title || '(untitled)'}</h5>
+                        <p className="text-xs text-rose-500 truncate">{ms.date ? new Date(ms.date + 'T00:00:00').toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : ''}</p>
+                      </div>
                       <button
-                        onClick={() => { setEditingMilestone({ ...ms }); setIsAddingMilestone(false); }}
-                        className="p-1.5 bg-rose-100 text-rose-600 rounded-lg hover:bg-rose-200"
+                        onClick={() => toggleMilestoneExpand(ms.id)}
+                        className="p-1.5 text-rose-500 hover:bg-rose-100 rounded-lg transition-colors flex-shrink-0"
+                        title={expandedMilestones.has(ms.id) ? 'Collapse' : 'Expand'}
                       >
-                        <Edit2 className="w-3.5 h-3.5" />
+                        <ChevronDown className={`w-4 h-4 transition-transform ${expandedMilestones.has(ms.id) ? 'rotate-180' : ''}`} />
                       </button>
-                      <button
-                        onClick={() => handleDeleteMilestone(ms.id)}
-                        className="p-1.5 bg-red-100 text-red-500 rounded-lg hover:bg-red-200"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        <button
+                          onClick={() => { setEditingMilestone({ ...ms }); setIsAddingMilestone(false); }}
+                          className="p-1.5 bg-rose-100 text-rose-600 rounded-lg hover:bg-rose-200"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteMilestone(ms.id)}
+                          className="p-1.5 bg-red-100 text-red-500 rounded-lg hover:bg-red-200"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
+                    {expandedMilestones.has(ms.id) && ms.description && (
+                      <div className="border-t border-rose-100 px-3 py-2 bg-white/50">
+                        <p className="text-sm text-rose-700">{ms.description}</p>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
             </div>
 
             {/* ─── Photos list ─── */}
-            {localPhotos.map((photo, index) => (
-              <div
-                key={photo.id}
-                draggable
-                onDragStart={() => handleDragStart(index)}
-                onDragOver={(e) => handleDragOver(e, index)}
-                className="flex items-center gap-4 p-4 bg-rose-50/50 rounded-xl border border-rose-100 cursor-move hover:bg-rose-50 transition-colors"
-              >
-                <GripVertical className="w-5 h-5 text-rose-300 flex-shrink-0" />
-                <div className="w-16 h-16 flex-shrink-0 rounded-lg overflow-hidden bg-rose-100">
-                  <img 
-                    src={photo.src} 
-                    alt={photo.title} 
-                    className="w-full h-full object-cover"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" fill="%23f43f5e"><rect width="64" height="64"/></svg>';
-                    }}
-                  />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h4 className="font-medium text-rose-800 truncate">{photo.title}</h4>
-                  <p className="text-sm text-rose-600/70">{photo.location}</p>
-                </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  <button
-                    onClick={() => toggleFavorite(photo.id)}
-                    className={`p-2 rounded-lg transition-colors ${photo.favorite ? 'bg-rose-500 text-white' : 'bg-rose-100 text-rose-400'}`}
-                  >
-                    <Star className="w-4 h-4" fill={photo.favorite ? 'currentColor' : 'none'} />
-                  </button>
-                  <button
-                    onClick={() => handleEdit(photo)}
-                    className="p-2 bg-rose-100 text-rose-600 rounded-lg hover:bg-rose-200"
-                  >
-                    <Edit2 className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => handleDelete(photo.id)}
-                    className="p-2 bg-red-100 text-red-500 rounded-lg hover:bg-red-200"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+            <div className="p-4 bg-white/60 rounded-xl border border-rose-100 flex flex-col">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h4 className="font-medium text-rose-800">Photos</h4>
+                  <p className="text-xs text-rose-500">Drag to reorder, click to edit or delete.</p>
                 </div>
               </div>
-            ))}
+
+              {localPhotos.length === 0 && (
+                <p className="text-sm text-rose-400 py-4 text-center">No photos yet. Add one to get started!</p>
+              )}
+
+              <div className="space-y-3">
+                {localPhotos.map((photo, index) => (
+                  <div
+                    key={photo.id}
+                    draggable
+                    onDragStart={() => handleDragStart(index)}
+                    onDragOver={(e) => handleDragOver(e, index)}
+                    className="bg-rose-50/50 rounded-xl border border-rose-100 overflow-hidden"
+                  >
+                    <div className="flex items-center gap-4 p-4 cursor-move hover:bg-rose-50 transition-colors">
+                      <GripVertical className="w-5 h-5 text-rose-300 flex-shrink-0" />
+                      <div className="w-16 h-16 flex-shrink-0 rounded-lg overflow-hidden bg-rose-100">
+                        <img
+                          src={photo.src}
+                          alt={photo.title}
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" fill="%23f43f5e"><rect width="64" height="64"/></svg>';
+                          }}
+                        />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h4 className="font-medium text-rose-800 truncate">{photo.title}</h4>
+                        <p className="text-sm text-rose-600/70">{photo.location}</p>
+                      </div>
+                      <button
+                        onClick={() => togglePhotoExpand(photo.id)}
+                        className="p-2 text-rose-500 hover:bg-rose-100 rounded-lg transition-colors flex-shrink-0"
+                        title={expandedPhotos.has(photo.id) ? 'Collapse' : 'Expand'}
+                      >
+                        <ChevronDown className={`w-4 h-4 transition-transform ${expandedPhotos.has(photo.id) ? 'rotate-180' : ''}`} />
+                      </button>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <button
+                          onClick={() => toggleFavorite(photo.id)}
+                          className={`p-2 rounded-lg transition-colors ${photo.favorite ? 'bg-rose-500 text-white' : 'bg-rose-100 text-rose-400'}`}
+                        >
+                          <Star className="w-4 h-4" fill={photo.favorite ? 'currentColor' : 'none'} />
+                        </button>
+                        <button
+                          onClick={() => handleEdit(photo)}
+                          className="p-2 bg-rose-100 text-rose-600 rounded-lg hover:bg-rose-200"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(photo.id)}
+                          className="p-2 bg-red-100 text-red-500 rounded-lg hover:bg-red-200"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                    {expandedPhotos.has(photo.id) && (
+                      <div className="border-t border-rose-100 px-4 py-3 bg-white/50 space-y-2">
+                        {photo.date && (
+                          <div className="flex items-start gap-2">
+                            <Calendar className="w-4 h-4 text-rose-500 mt-0.5 flex-shrink-0" />
+                            <span className="text-sm text-rose-700">{new Date(photo.date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</span>
+                          </div>
+                        )}
+                        {photo.description && (
+                          <div className="text-sm text-rose-700">{photo.description}</div>
+                        )}
+                        {(photo.lat || photo.lng) && (
+                          <div className="flex items-start gap-2">
+                            <MapPin className="w-4 h-4 text-rose-500 mt-0.5 flex-shrink-0" />
+                            <span className="text-sm text-rose-700">{photo.lat?.toFixed(4)}, {photo.lng?.toFixed(4)}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </ScrollArea>
 
@@ -1919,6 +2000,7 @@ function App() {
     <div className="min-h-screen bg-gradient-to-b from-rose-50 via-pink-50 to-white">
       {/* Admin Button */}
       <button
+        data-testid="open-admin"
         onClick={() => setShowAdmin(true)}
         className="fixed top-4 right-4 z-50 w-12 h-12 bg-white/80 backdrop-blur-sm rounded-full shadow-lg flex items-center justify-center hover:bg-white hover:scale-110 transition-all"
       >

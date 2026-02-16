@@ -81,6 +81,9 @@ web_modules/
 .env.production.local
 .env.local
 
+# Admin automation config (contains credentials)
+config.yaml
+
 # parcel-bundler cache (https://parceljs.org/)
 .cache
 .parcel-cache
