@@ -1150,9 +1150,9 @@ function AdminPanel({
                         onDragOver={(e) => handleDragOver(e, index)}
                         className="bg-rose-50/50 rounded-xl border border-rose-100 overflow-hidden"
                       >
-                        <div className="flex items-center gap-4 p-4 cursor-move hover:bg-rose-50 transition-colors">
-                          <GripVertical className="w-5 h-5 text-rose-300 flex-shrink-0" />
-                          <div className="w-16 h-16 flex-shrink-0 rounded-lg overflow-hidden bg-rose-100">
+                        <div className="flex items-center gap-2 sm:gap-4 p-3 sm:p-4 cursor-move hover:bg-rose-50 transition-colors min-w-0">
+                          <GripVertical className="w-4 h-4 sm:w-5 sm:h-5 text-rose-300 flex-shrink-0" />
+                          <div className="w-12 h-12 sm:w-16 sm:h-16 flex-shrink-0 rounded-lg overflow-hidden bg-rose-100">
                             <img
                               src={photo.src}
                               alt={photo.title}
@@ -1163,34 +1163,34 @@ function AdminPanel({
                             />
                           </div>
                           <div className="flex-1 min-w-0">
-                            <h4 className="font-medium text-rose-800 truncate">{photo.title}</h4>
-                            <p className="text-sm text-rose-600/70">{photo.location}</p>
+                            <h4 className="font-medium text-sm sm:text-base text-rose-800 truncate">{photo.title}</h4>
+                            <p className="hidden sm:block text-sm text-rose-600/70 truncate">{photo.location}</p>
                           </div>
                           <button
                             onClick={() => togglePhotoExpand(photo.id)}
-                            className="p-2 text-rose-500 hover:bg-rose-100 rounded-lg transition-colors flex-shrink-0"
+                            className="p-1.5 sm:p-2 text-rose-500 hover:bg-rose-100 rounded-lg transition-colors flex-shrink-0"
                             title={expandedPhotos.has(photo.id) ? 'Collapse' : 'Expand'}
                           >
-                            <ChevronDown className={`w-4 h-4 transition-transform ${expandedPhotos.has(photo.id) ? 'rotate-180' : ''}`} />
+                            <ChevronDown className={`w-3.5 h-3.5 sm:w-4 sm:h-4 transition-transform ${expandedPhotos.has(photo.id) ? 'rotate-180' : ''}`} />
                           </button>
-                          <div className="flex items-center gap-2 flex-shrink-0">
+                          <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
                             <button
                               onClick={() => toggleFavorite(photo.id)}
-                              className={`p-2 rounded-lg transition-colors ${photo.favorite ? 'bg-rose-500 text-white' : 'bg-rose-100 text-rose-400'}`}
+                              className={`p-1.5 sm:p-2 rounded-lg transition-colors ${photo.favorite ? 'bg-rose-500 text-white' : 'bg-rose-100 text-rose-400'}`}
                             >
-                              <Star className="w-4 h-4" fill={photo.favorite ? 'currentColor' : 'none'} />
+                              <Star className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill={photo.favorite ? 'currentColor' : 'none'} />
                             </button>
                             <button
                               onClick={() => handleEdit(photo)}
-                              className="p-2 bg-rose-100 text-rose-600 rounded-lg hover:bg-rose-200"
+                              className="p-1.5 sm:p-2 bg-rose-100 text-rose-600 rounded-lg hover:bg-rose-200"
                             >
-                              <Edit2 className="w-4 h-4" />
+                              <Edit2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                             </button>
                             <button
                               onClick={() => handleDelete(photo.id)}
-                              className="p-2 bg-red-100 text-red-500 rounded-lg hover:bg-red-200"
+                              className="p-1.5 sm:p-2 bg-red-100 text-red-500 rounded-lg hover:bg-red-200"
                             >
-                              <Trash2 className="w-4 h-4" />
+                              <Trash2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                             </button>
                           </div>
                         </div>
