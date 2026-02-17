@@ -541,6 +541,8 @@ function AdminPanel({
   // Expandable item state
   const [expandedMilestones, setExpandedMilestones] = useState<Set<number>>(new Set());
   const [expandedPhotos, setExpandedPhotos] = useState<Set<number>>(new Set());
+  const [isMilestonesSectionExpanded, setIsMilestonesSectionExpanded] = useState(false);
+  const [isPhotosSectionExpanded, setIsPhotosSectionExpanded] = useState(false);
 
   const toggleMilestoneExpand = (id: number) => {
     setExpandedMilestones(prev => {
@@ -1040,152 +1042,182 @@ function AdminPanel({
 
             {/* ─── Milestones management ─── */}
             <div className="p-4 bg-white/60 rounded-xl border border-rose-100 flex flex-col">
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <h4 className="font-medium text-rose-800">Milestones</h4>
-                  <p className="text-xs text-rose-500">Manage the "Our Story" timeline entries.</p>
-                </div>
-                <Button onClick={handleAddMilestone} size="sm" className="bg-rose-500 hover:bg-rose-600">
-                  <Plus className="w-4 h-4 mr-1" />
-                  Add
+              <div className="flex items-center justify-between">
+                <h4 className="font-medium text-rose-800">Milestones</h4>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsMilestonesSectionExpanded(prev => !prev)}
+                  className="border-rose-200 text-rose-600 hover:bg-rose-50"
+                  title={isMilestonesSectionExpanded ? 'Collapse section' : 'Expand section'}
+                >
+                  <span className="mr-1">{isMilestonesSectionExpanded ? 'Collapse' : 'Expand'}</span>
+                  <ChevronDown className={`w-4 h-4 transition-transform ${isMilestonesSectionExpanded ? 'rotate-180' : ''}`} />
                 </Button>
               </div>
 
-              {localMilestones.length === 0 && (
-                <p className="text-sm text-rose-400 py-4 text-center">No milestones yet.</p>
-              )}
-
-              <div className="space-y-2">
-                {localMilestones.map(ms => (
-                  <div key={ms.id} className="bg-rose-50/50 rounded-lg border border-rose-100 overflow-hidden">
-                    <div className="flex items-center gap-3 p-3">
-                      <div className="w-8 h-8 bg-gradient-to-br from-rose-400 to-pink-500 rounded-full flex items-center justify-center text-white flex-shrink-0">
-                        {ms.icon}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <h5 className="font-medium text-rose-800 text-sm truncate">{ms.title || '(untitled)'}</h5>
-                        <p className="text-xs text-rose-500 truncate">{ms.date ? new Date(ms.date + 'T00:00:00').toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : ''}</p>
-                      </div>
-                      <button
-                        onClick={() => toggleMilestoneExpand(ms.id)}
-                        className="p-1.5 text-rose-500 hover:bg-rose-100 rounded-lg transition-colors flex-shrink-0"
-                        title={expandedMilestones.has(ms.id) ? 'Collapse' : 'Expand'}
-                      >
-                        <ChevronDown className={`w-4 h-4 transition-transform ${expandedMilestones.has(ms.id) ? 'rotate-180' : ''}`} />
-                      </button>
-                      <div className="flex items-center gap-1 flex-shrink-0">
-                        <button
-                          onClick={() => { setEditingMilestone({ ...ms }); setIsAddingMilestone(false); }}
-                          className="p-1.5 bg-rose-100 text-rose-600 rounded-lg hover:bg-rose-200"
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteMilestone(ms.id)}
-                          className="p-1.5 bg-red-100 text-red-500 rounded-lg hover:bg-red-200"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                    {expandedMilestones.has(ms.id) && ms.description && (
-                      <div className="border-t border-rose-100 px-3 py-2 bg-white/50">
-                        <p className="text-sm text-rose-700">{ms.description}</p>
-                      </div>
-                    )}
+              {isMilestonesSectionExpanded && (
+                <>
+                  <div className="flex items-center justify-between mt-3 mb-3">
+                    <p className="text-xs text-rose-500">Manage the "Our Story" timeline entries.</p>
+                    <Button onClick={handleAddMilestone} size="sm" className="bg-rose-500 hover:bg-rose-600">
+                      <Plus className="w-4 h-4 mr-1" />
+                      Add
+                    </Button>
                   </div>
-                ))}
-              </div>
+
+                  {localMilestones.length === 0 && (
+                    <p className="text-sm text-rose-400 py-4 text-center">No milestones yet.</p>
+                  )}
+
+                  <div className="space-y-2">
+                    {localMilestones.map(ms => (
+                      <div key={ms.id} className="bg-rose-50/50 rounded-lg border border-rose-100 overflow-hidden">
+                        <div className="flex items-center gap-3 p-3">
+                          <div className="w-8 h-8 bg-gradient-to-br from-rose-400 to-pink-500 rounded-full flex items-center justify-center text-white flex-shrink-0">
+                            {ms.icon}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <h5 className="font-medium text-rose-800 text-sm truncate">{ms.title || '(untitled)'}</h5>
+                            <p className="text-xs text-rose-500 truncate">{ms.date ? new Date(ms.date + 'T00:00:00').toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : ''}</p>
+                          </div>
+                          <button
+                            onClick={() => toggleMilestoneExpand(ms.id)}
+                            className="p-1.5 text-rose-500 hover:bg-rose-100 rounded-lg transition-colors flex-shrink-0"
+                            title={expandedMilestones.has(ms.id) ? 'Collapse' : 'Expand'}
+                          >
+                            <ChevronDown className={`w-4 h-4 transition-transform ${expandedMilestones.has(ms.id) ? 'rotate-180' : ''}`} />
+                          </button>
+                          <div className="flex items-center gap-1 flex-shrink-0">
+                            <button
+                              onClick={() => { setEditingMilestone({ ...ms }); setIsAddingMilestone(false); }}
+                              className="p-1.5 bg-rose-100 text-rose-600 rounded-lg hover:bg-rose-200"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteMilestone(ms.id)}
+                              className="p-1.5 bg-red-100 text-red-500 rounded-lg hover:bg-red-200"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                        {expandedMilestones.has(ms.id) && ms.description && (
+                          <div className="border-t border-rose-100 px-3 py-2 bg-white/50">
+                            <p className="text-sm text-rose-700">{ms.description}</p>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
 
             {/* ─── Photos list ─── */}
             <div className="p-4 bg-white/60 rounded-xl border border-rose-100 flex flex-col">
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <h4 className="font-medium text-rose-800">Photos</h4>
-                  <p className="text-xs text-rose-500">Drag to reorder, click to edit or delete.</p>
-                </div>
+              <div className="flex items-center justify-between">
+                <h4 className="font-medium text-rose-800">Photos</h4>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsPhotosSectionExpanded(prev => !prev)}
+                  className="border-rose-200 text-rose-600 hover:bg-rose-50"
+                  title={isPhotosSectionExpanded ? 'Collapse section' : 'Expand section'}
+                >
+                  <span className="mr-1">{isPhotosSectionExpanded ? 'Collapse' : 'Expand'}</span>
+                  <ChevronDown className={`w-4 h-4 transition-transform ${isPhotosSectionExpanded ? 'rotate-180' : ''}`} />
+                </Button>
               </div>
 
-              {localPhotos.length === 0 && (
-                <p className="text-sm text-rose-400 py-4 text-center">No photos yet. Add one to get started!</p>
-              )}
+              {isPhotosSectionExpanded && (
+                <>
+                  <p className="text-xs text-rose-500 mt-3 mb-3">Drag to reorder, click to edit or delete.</p>
 
-              <div className="space-y-3">
-                {localPhotos.map((photo, index) => (
-                  <div
-                    key={photo.id}
-                    draggable
-                    onDragStart={() => handleDragStart(index)}
-                    onDragOver={(e) => handleDragOver(e, index)}
-                    className="bg-rose-50/50 rounded-xl border border-rose-100 overflow-hidden"
-                  >
-                    <div className="flex items-center gap-4 p-4 cursor-move hover:bg-rose-50 transition-colors">
-                      <GripVertical className="w-5 h-5 text-rose-300 flex-shrink-0" />
-                      <div className="w-16 h-16 flex-shrink-0 rounded-lg overflow-hidden bg-rose-100">
-                        <img
-                          src={photo.src}
-                          alt={photo.title}
-                          className="w-full h-full object-cover"
-                          onError={(e) => {
-                            (e.target as HTMLImageElement).src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" fill="%23f43f5e"><rect width="64" height="64"/></svg>';
-                          }}
-                        />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <h4 className="font-medium text-rose-800 truncate">{photo.title}</h4>
-                        <p className="text-sm text-rose-600/70">{photo.location}</p>
-                      </div>
-                      <button
-                        onClick={() => togglePhotoExpand(photo.id)}
-                        className="p-2 text-rose-500 hover:bg-rose-100 rounded-lg transition-colors flex-shrink-0"
-                        title={expandedPhotos.has(photo.id) ? 'Collapse' : 'Expand'}
+                  {localPhotos.length === 0 && (
+                    <p className="text-sm text-rose-400 py-4 text-center">No photos yet. Add one to get started!</p>
+                  )}
+
+                  <div className="space-y-3">
+                    {localPhotos.map((photo, index) => (
+                      <div
+                        key={photo.id}
+                        draggable
+                        onDragStart={() => handleDragStart(index)}
+                        onDragOver={(e) => handleDragOver(e, index)}
+                        className="bg-rose-50/50 rounded-xl border border-rose-100 overflow-hidden"
                       >
-                        <ChevronDown className={`w-4 h-4 transition-transform ${expandedPhotos.has(photo.id) ? 'rotate-180' : ''}`} />
-                      </button>
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        <button
-                          onClick={() => toggleFavorite(photo.id)}
-                          className={`p-2 rounded-lg transition-colors ${photo.favorite ? 'bg-rose-500 text-white' : 'bg-rose-100 text-rose-400'}`}
-                        >
-                          <Star className="w-4 h-4" fill={photo.favorite ? 'currentColor' : 'none'} />
-                        </button>
-                        <button
-                          onClick={() => handleEdit(photo)}
-                          className="p-2 bg-rose-100 text-rose-600 rounded-lg hover:bg-rose-200"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(photo.id)}
-                          className="p-2 bg-red-100 text-red-500 rounded-lg hover:bg-red-200"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-                    {expandedPhotos.has(photo.id) && (
-                      <div className="border-t border-rose-100 px-4 py-3 bg-white/50 space-y-2">
-                        {photo.date && (
-                          <div className="flex items-start gap-2">
-                            <Calendar className="w-4 h-4 text-rose-500 mt-0.5 flex-shrink-0" />
-                            <span className="text-sm text-rose-700">{new Date(photo.date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</span>
+                        <div className="flex items-center gap-4 p-4 cursor-move hover:bg-rose-50 transition-colors">
+                          <GripVertical className="w-5 h-5 text-rose-300 flex-shrink-0" />
+                          <div className="w-16 h-16 flex-shrink-0 rounded-lg overflow-hidden bg-rose-100">
+                            <img
+                              src={photo.src}
+                              alt={photo.title}
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                (e.target as HTMLImageElement).src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" fill="%23f43f5e"><rect width="64" height="64"/></svg>';
+                              }}
+                            />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <h4 className="font-medium text-rose-800 truncate">{photo.title}</h4>
+                            <p className="text-sm text-rose-600/70">{photo.location}</p>
+                          </div>
+                          <button
+                            onClick={() => togglePhotoExpand(photo.id)}
+                            className="p-2 text-rose-500 hover:bg-rose-100 rounded-lg transition-colors flex-shrink-0"
+                            title={expandedPhotos.has(photo.id) ? 'Collapse' : 'Expand'}
+                          >
+                            <ChevronDown className={`w-4 h-4 transition-transform ${expandedPhotos.has(photo.id) ? 'rotate-180' : ''}`} />
+                          </button>
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            <button
+                              onClick={() => toggleFavorite(photo.id)}
+                              className={`p-2 rounded-lg transition-colors ${photo.favorite ? 'bg-rose-500 text-white' : 'bg-rose-100 text-rose-400'}`}
+                            >
+                              <Star className="w-4 h-4" fill={photo.favorite ? 'currentColor' : 'none'} />
+                            </button>
+                            <button
+                              onClick={() => handleEdit(photo)}
+                              className="p-2 bg-rose-100 text-rose-600 rounded-lg hover:bg-rose-200"
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => handleDelete(photo.id)}
+                              className="p-2 bg-red-100 text-red-500 rounded-lg hover:bg-red-200"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                        {expandedPhotos.has(photo.id) && (
+                          <div className="border-t border-rose-100 px-4 py-3 bg-white/50 space-y-2">
+                            {photo.date && (
+                              <div className="flex items-start gap-2">
+                                <Calendar className="w-4 h-4 text-rose-500 mt-0.5 flex-shrink-0" />
+                                <span className="text-sm text-rose-700">{new Date(photo.date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</span>
+                              </div>
+                            )}
+                            {photo.description && (
+                              <div className="text-sm text-rose-700">{photo.description}</div>
+                            )}
+                            {(photo.lat || photo.lng) && (
+                              <div className="flex items-start gap-2">
+                                <MapPin className="w-4 h-4 text-rose-500 mt-0.5 flex-shrink-0" />
+                                <span className="text-sm text-rose-700">{photo.lat?.toFixed(4)}, {photo.lng?.toFixed(4)}</span>
+                              </div>
+                            )}
                           </div>
                         )}
-                        {photo.description && (
-                          <div className="text-sm text-rose-700">{photo.description}</div>
-                        )}
-                        {(photo.lat || photo.lng) && (
-                          <div className="flex items-start gap-2">
-                            <MapPin className="w-4 h-4 text-rose-500 mt-0.5 flex-shrink-0" />
-                            <span className="text-sm text-rose-700">{photo.lat?.toFixed(4)}, {photo.lng?.toFixed(4)}</span>
-                          </div>
-                        )}
                       </div>
-                    )}
+                    ))}
                   </div>
-                ))}
-              </div>
+                </>
+              )}
             </div>
           </div>
         </div>
