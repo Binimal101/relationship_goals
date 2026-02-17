@@ -1606,27 +1606,30 @@ function InfiniteCarousel({
             onClick={() => {
               if (isDragging) return;
               if (isMobile) {
-                const justTouchedThisCard =
-                  touchActivatedCardRef.current === photo.id &&
-                  performance.now() - lastTouchStartAtRef.current < 500;
+                const now = performance.now();
 
-                if (justTouchedThisCard) {
-                  touchActivatedCardRef.current = null;
-                  return;
-                }
-
+                // first tap -> show metadata
                 if (activeCardId !== photo.id) {
                   setActiveCardId(photo.id);
+                  touchActivatedCardRef.current = photo.id;
+                  lastTouchStartAtRef.current = now;
                   return;
                 }
+
+                // second tap within 500ms -> open photo
+                if (touchActivatedCardRef.current === photo.id && now - lastTouchStartAtRef.current < 500) {
+                  touchActivatedCardRef.current = null;
+                  onPhotoClick(photo);
+                  return;
+                }
+
+                // otherwise treat as a fresh tap (update timestamp)
+                touchActivatedCardRef.current = photo.id;
+                lastTouchStartAtRef.current = now;
+                return;
               }
+
               onPhotoClick(photo);
-            }}
-            onTouchStart={() => {
-              if (!isMobile) return;
-              setActiveCardId(photo.id);
-              touchActivatedCardRef.current = photo.id;
-              lastTouchStartAtRef.current = performance.now();
             }}
             className="flex-shrink-0 w-72 h-96 rounded-2xl overflow-hidden shadow-xl hover:shadow-2xl transition-all duration-300 hover:scale-105 cursor-pointer group relative"
           >
