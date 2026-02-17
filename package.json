@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "test:e2e": "node scripts/e2e-admin-upload.js",
     "start": "npm run build && vite preview --host --port 4173",
-    "dev:admin": "node scripts/admin-login-automation.js"
+    "dev:admin": "node scripts/admin-login-automation.js",
+    "db:dummy:seed": "node scripts/seed-dummy-photos-50.js",
+    "db:dummy:remove": "node scripts/remove-dummy-photos-50.js"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

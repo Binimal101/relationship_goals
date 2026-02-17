@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import { useIsMobile } from '@/hooks/use-mobile';
 import { GoogleMap, useJsApiLoader } from '@react-google-maps/api';
 
 // Photo data structure
@@ -1390,7 +1391,7 @@ function AdminPanel({
   );
 }
 
-// Smart Carousel — no duplication when all photos fit; cyclical wrap-around when they don't
+// Infinite Carousel — circular scrolling only when content truly overflows container
 function InfiniteCarousel({ 
   photos, 
   onPhotoClick 
@@ -1398,79 +1399,64 @@ function InfiniteCarousel({
   photos: Photo[]; 
   onPhotoClick: (photo: Photo) => void;
 }) {
+  const isMobile = useIsMobile();
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [activeCardId, setActiveCardId] = useState<number | null>(null);
   const [startX, setStartX] = useState(0);
   const [scrollLeftState, setScrollLeftState] = useState(0);
-  const [showLeftArrow, setShowLeftArrow] = useState(false);
-  const [showRightArrow, setShowRightArrow] = useState(false);
+  const [needsScroll, setNeedsScroll] = useState(false);
+  const touchActivatedCardRef = useRef<number | null>(null);
+  const lastTouchStartAtRef = useRef(0);
+  const lastPointerXRef = useRef(0);
+  const lastPointerTimeRef = useRef(0);
+  const velocityRef = useRef(0);
+  const inertiaFrameRef = useRef<number | null>(null);
 
-  // card metrics
-  const CARD_W = 288; // w-72 = 18rem = 288px
-  const GAP = 24;     // gap-6 = 1.5rem = 24px
-
-  // Determine whether photos overflow the viewport (needs scrolling / pagination)
-  const needsScroll = useMemo(() => {
-    // rough check: total cards width vs typical viewport
-    const totalW = photos.length * CARD_W + (photos.length - 1) * GAP;
-    return totalW > (typeof window !== 'undefined' ? window.innerWidth : 1200);
-  }, [photos.length]);
-
-  // display list: only duplicate when scrolling is needed
-  const displayPhotos = useMemo(() => {
-    if (!needsScroll) return photos;
-    // duplicate once for wrap-around (original + copy)
-    return [...photos, ...photos];
-  }, [photos, needsScroll]);
-
-  const checkArrows = () => {
-    if (!containerRef.current || !needsScroll) {
-      setShowLeftArrow(false);
-      setShowRightArrow(false);
-      return;
-    }
-    const { scrollLeft, scrollWidth, clientWidth } = containerRef.current;
-    setShowLeftArrow(scrollLeft > 50);
-    setShowRightArrow(scrollLeft < scrollWidth - clientWidth - 50);
+  const checkOverflow = () => {
+    const el = containerRef.current;
+    if (!el) return;
+    setNeedsScroll(el.scrollWidth - el.clientWidth > 1);
   };
 
-  // On mount: if scrollable, start at the beginning (not middle)
   useEffect(() => {
-    if (containerRef.current) {
-      containerRef.current.scrollLeft = 0;
-      checkArrows();
-    }
-  }, [needsScroll]);
-
-  // Cyclical wrap-around: when the user scrolls past the first copy, snap back to start
-  useEffect(() => {
-    if (!needsScroll) return;
+    checkOverflow();
     const el = containerRef.current;
     if (!el) return;
 
-    const handleScroll = () => {
-      checkArrows();
-      if (!needsScroll) return;
-      const singleSetWidth = photos.length * (CARD_W + GAP);
+    const ro = new ResizeObserver(() => checkOverflow());
+    ro.observe(el);
+    Array.from(el.children).forEach(child => ro.observe(child));
 
-      // scrolled past the end of original set → snap to equivalent position at start
-      if (el.scrollLeft >= singleSetWidth) {
-        el.scrollLeft -= singleSetWidth;
-      } else if (el.scrollLeft <= 0) {
-        el.scrollLeft += singleSetWidth;
-      }
+    window.addEventListener('resize', checkOverflow);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', checkOverflow);
     };
+  }, [photos]);
 
-    el.addEventListener('scrollend', handleScroll);
-    return () => el.removeEventListener('scrollend', handleScroll);
-  }, [needsScroll, photos.length]);
+  const getStep = () => {
+    const el = containerRef.current;
+    if (!el || el.children.length === 0) return 312;
+    const first = el.children[0] as HTMLElement;
+    const second = el.children[1] as HTMLElement | undefined;
+    if (!second) return first.getBoundingClientRect().width;
+    return Math.abs(second.offsetLeft - first.offsetLeft) || first.getBoundingClientRect().width;
+  };
 
   // Mouse drag handlers
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (!containerRef.current) return;
+    if (!containerRef.current || !needsScroll) return;
+    if (inertiaFrameRef.current) {
+      cancelAnimationFrame(inertiaFrameRef.current);
+      inertiaFrameRef.current = null;
+    }
     setIsDragging(true);
     setStartX(e.pageX - containerRef.current.offsetLeft);
     setScrollLeftState(containerRef.current.scrollLeft);
+    lastPointerXRef.current = e.pageX;
+    lastPointerTimeRef.current = performance.now();
+    velocityRef.current = 0;
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
@@ -1479,23 +1465,54 @@ function InfiniteCarousel({
     const x = e.pageX - containerRef.current.offsetLeft;
     const walk = (x - startX) * 1.5;
     containerRef.current.scrollLeft = scrollLeftState - walk;
+
+    const now = performance.now();
+    const dt = Math.max(1, now - lastPointerTimeRef.current);
+    const dx = e.pageX - lastPointerXRef.current;
+    velocityRef.current = dx / dt;
+    lastPointerXRef.current = e.pageX;
+    lastPointerTimeRef.current = now;
   };
 
-  const handleMouseUp = () => setIsDragging(false);
-  const handleMouseLeave = () => setIsDragging(false);
+  const startInertia = () => {
+    const el = containerRef.current;
+    if (!el || !needsScroll) return;
 
-  // Touch handlers
-  const handleTouchStart = (e: React.TouchEvent) => {
-    if (!containerRef.current) return;
-    setStartX(e.touches[0].pageX - containerRef.current.offsetLeft);
-    setScrollLeftState(containerRef.current.scrollLeft);
+    let vx = velocityRef.current * -24;
+    const friction = 0.94;
+
+    const tick = () => {
+      if (!containerRef.current) return;
+
+      containerRef.current.scrollLeft += vx;
+      vx *= friction;
+
+      const maxScroll = Math.max(0, containerRef.current.scrollWidth - containerRef.current.clientWidth);
+      if (containerRef.current.scrollLeft <= 0 || containerRef.current.scrollLeft >= maxScroll) {
+        vx *= 0.6;
+      }
+
+      if (Math.abs(vx) < 0.2) {
+        inertiaFrameRef.current = null;
+        return;
+      }
+
+      inertiaFrameRef.current = requestAnimationFrame(tick);
+    };
+
+    inertiaFrameRef.current = requestAnimationFrame(tick);
   };
 
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (!containerRef.current) return;
-    const x = e.touches[0].pageX - containerRef.current.offsetLeft;
-    const walk = (x - startX) * 1.5;
-    containerRef.current.scrollLeft = scrollLeftState - walk;
+  const handleMouseUp = () => {
+    if (!isDragging) return;
+    setIsDragging(false);
+    startInertia();
+  };
+
+  const handleMouseLeave = () => {
+    if (!isDragging) return;
+    setIsDragging(false);
+    startInertia();
   };
 
   // Keyboard navigation
@@ -1503,9 +1520,9 @@ function InfiniteCarousel({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!containerRef.current || !needsScroll) return;
       if (e.key === 'ArrowLeft') {
-        containerRef.current.scrollBy({ left: -(CARD_W + GAP), behavior: 'smooth' });
+        scroll('left');
       } else if (e.key === 'ArrowRight') {
-        containerRef.current.scrollBy({ left: CARD_W + GAP, behavior: 'smooth' });
+        scroll('right');
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -1513,13 +1530,26 @@ function InfiniteCarousel({
   }, [needsScroll]);
 
   const scroll = (direction: 'left' | 'right') => {
-    if (containerRef.current) {
-      containerRef.current.scrollBy({ 
-        left: direction === 'left' ? -(CARD_W + GAP) : (CARD_W + GAP), 
-        behavior: 'smooth' 
-      });
-    }
+    const el = containerRef.current;
+    if (!el || !needsScroll) return;
+
+    const maxScroll = Math.max(0, el.scrollWidth - el.clientWidth);
+    const step = getStep();
+    const epsilon = 2;
+    const delta = direction === 'left' ? -step : step;
+
+    let next = el.scrollLeft + delta;
+    if (next > maxScroll - epsilon) next = 0;
+    if (next < epsilon) next = maxScroll;
+
+    el.scrollTo({ left: Math.max(0, Math.min(maxScroll, next)), behavior: 'smooth' });
   };
+
+  useEffect(() => {
+    return () => {
+      if (inertiaFrameRef.current) cancelAnimationFrame(inertiaFrameRef.current);
+    };
+  }, []);
 
   if (photos.length === 0) {
     return (
@@ -1538,7 +1568,7 @@ function InfiniteCarousel({
       {needsScroll && <div className="absolute right-0 top-0 bottom-0 w-24 bg-gradient-to-l from-rose-50 to-transparent z-10 pointer-events-none" />}
 
       {/* Navigation Arrows — only when scrollable */}
-      {needsScroll && showLeftArrow && (
+      {needsScroll && (
         <button
           onClick={() => scroll('left')}
           className="absolute left-4 top-1/2 -translate-y-1/2 z-20 w-12 h-12 bg-white/90 backdrop-blur-sm rounded-full flex items-center justify-center shadow-lg hover:bg-white transition-all hover:scale-110"
@@ -1546,7 +1576,7 @@ function InfiniteCarousel({
           <ChevronLeft className="w-6 h-6 text-rose-600" />
         </button>
       )}
-      {needsScroll && showRightArrow && (
+      {needsScroll && (
         <button
           onClick={() => scroll('right')}
           className="absolute right-4 top-1/2 -translate-y-1/2 z-20 w-12 h-12 bg-white/90 backdrop-blur-sm rounded-full flex items-center justify-center shadow-lg hover:bg-white transition-all hover:scale-110"
@@ -1566,14 +1596,38 @@ function InfiniteCarousel({
         onMouseMove={needsScroll ? handleMouseMove : undefined}
         onMouseUp={needsScroll ? handleMouseUp : undefined}
         onMouseLeave={needsScroll ? handleMouseLeave : undefined}
-        onTouchStart={needsScroll ? handleTouchStart : undefined}
-        onTouchMove={needsScroll ? handleTouchMove : undefined}
-        onScroll={needsScroll ? checkArrows : undefined}
+        onScroll={() => {
+          if (isMobile && activeCardId !== null) setActiveCardId(null);
+        }}
       >
-        {displayPhotos.map((photo, index) => (
+        {photos.map((photo) => (
           <div
-            key={`${photo.id}-${index}`}
-            onClick={() => !isDragging && onPhotoClick(photo)}
+            key={photo.id}
+            onClick={() => {
+              if (isDragging) return;
+              if (isMobile) {
+                const justTouchedThisCard =
+                  touchActivatedCardRef.current === photo.id &&
+                  performance.now() - lastTouchStartAtRef.current < 500;
+
+                if (justTouchedThisCard) {
+                  touchActivatedCardRef.current = null;
+                  return;
+                }
+
+                if (activeCardId !== photo.id) {
+                  setActiveCardId(photo.id);
+                  return;
+                }
+              }
+              onPhotoClick(photo);
+            }}
+            onTouchStart={() => {
+              if (!isMobile) return;
+              setActiveCardId(photo.id);
+              touchActivatedCardRef.current = photo.id;
+              lastTouchStartAtRef.current = performance.now();
+            }}
             className="flex-shrink-0 w-72 h-96 rounded-2xl overflow-hidden shadow-xl hover:shadow-2xl transition-all duration-300 hover:scale-105 cursor-pointer group relative"
           >
             <img
@@ -1584,7 +1638,11 @@ function InfiniteCarousel({
             />
             
             {/* Gradient Overlay */}
-            <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+            <div
+              className={`absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent transition-opacity duration-300 ${
+                isMobile ? (activeCardId === photo.id ? 'opacity-100' : 'opacity-0') : 'opacity-0 group-hover:opacity-100'
+              }`}
+            >
               <div className="absolute bottom-0 left-0 right-0 p-5 text-white">
                 <div className="flex items-center gap-2 mb-2">
                   <Calendar className="w-4 h-4 text-rose-300" />
