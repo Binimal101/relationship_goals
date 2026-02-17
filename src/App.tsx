@@ -970,7 +970,9 @@ function AdminPanel({
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+      {/* min-h-0 is required so flex children (the ScrollArea) can shrink and become scrollable.
+          Without it, inner content can overflow the modal when using `flex` + `overflow-auto`. */}
+      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl max-h-[90vh] min-h-0 flex flex-col">
         <div className="p-6 border-b border-rose-100 flex items-center justify-between">
           <div>
             <h2 className="text-2xl font-bold text-gradient">Admin Panel</h2>
@@ -987,7 +989,7 @@ function AdminPanel({
           </div>
         </div>
 
-        <ScrollArea className="flex-1 p-6">
+        <ScrollArea className="flex-1 p-6 min-h-0">
           <div className="space-y-3">
             {/* Relationship / anniversary editor */}
             <div className="p-4 bg-white/60 rounded-xl border border-rose-100">
