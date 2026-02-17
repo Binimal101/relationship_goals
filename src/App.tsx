@@ -502,16 +502,12 @@ function AdminPanel({
   photos, 
   onUpdatePhotos, 
   onClose,
-  relationshipStartDate,
-  onUpdateRelationshipStartDate,
   milestones: propMilestones,
   onUpdateMilestones,
 }: { 
   photos: Photo[]; 
   onUpdatePhotos: (photos: Photo[]) => void;
   onClose: () => void;
-  relationshipStartDate?: Date | null;
-  onUpdateRelationshipStartDate?: (d: Date) => void;
   milestones: Milestone[];
   onUpdateMilestones: (milestones: Milestone[]) => void;
 }) {
@@ -532,11 +528,6 @@ function AdminPanel({
   const [geocodeError, setGeocodeError] = useState<string | null>(null);
   const autocompleteSessionRef = useRef<google.maps.places.AutocompleteSessionToken | null>(null);
   const placeDropdownRef = useRef<HTMLDivElement>(null);
-
-  // relationship / anniversary editor (admin panel)
-  const [localRelationshipDate, setLocalRelationshipDate] = useState<string>(relationshipStartDate ? relationshipStartDate.toISOString().split('T')[0] : '');
-  const [isSavingRelationshipDate, setIsSavingRelationshipDate] = useState(false);
-  const [relationshipSaveMsg, setRelationshipSaveMsg] = useState<string | null>(null);
 
   // Expandable item state
   const [expandedMilestones, setExpandedMilestones] = useState<Set<number>>(new Set());
@@ -561,10 +552,6 @@ function AdminPanel({
       return newSet;
     });
   };
-
-  useEffect(() => {
-    setLocalRelationshipDate(relationshipStartDate ? relationshipStartDate.toISOString().split('T')[0] : '');
-  }, [relationshipStartDate]);
 
   const handleSave = async () => {
     // Persist localPhotos to Supabase (upsert).
@@ -979,10 +966,6 @@ function AdminPanel({
             <p className="text-rose-600/70 text-sm">Manage our precious memories</p>
           </div>
           <div className="flex items-center gap-3">
-            <Button onClick={handleAdd} className="bg-rose-500 hover:bg-rose-600">
-              <Plus className="w-4 h-4 mr-2" />
-              Add Photo
-            </Button>
             <Button variant="ghost" onClick={onClose} className="text-rose-500 hover:bg-rose-50">
               <X className="w-5 h-5" />
             </Button>
@@ -991,87 +974,38 @@ function AdminPanel({
 
         <div className="flex-1 min-h-0 overflow-hidden p-6 flex flex-col">
           <div className="space-y-3 w-full min-w-0 max-w-full flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1">
-            {/* Relationship / anniversary editor */}
-            <div className="p-4 bg-white/60 rounded-xl border border-rose-100">
-              <div className="flex items-center justify-between mb-2">
-                <div>
-                  <h4 className="font-medium text-rose-800">Relationship start date</h4>
-                  <p className="text-xs text-rose-500">Used for "Since ..." label and the "Together for" counter.</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Input
-                    type="date"
-                    value={localRelationshipDate}
-                    onChange={(e) => setLocalRelationshipDate(e.target.value)}
-                    className="text-sm"
-                  />
-                  <Button
-                    onClick={async () => {
-                      setIsSavingRelationshipDate(true);
-                      setRelationshipSaveMsg(null);
-                      try {
-                        // prefer new `anniversaries` table; fall back to `site_settings` if table missing
-                        const { error: upsertErr } = await supabase.from('anniversaries').upsert({ id: 1, start_date: localRelationshipDate });
-                        if (upsertErr) {
-                          // fallback: save into site_settings (legacy)
-                          console.warn('anniversaries.upsert failed, falling back to site_settings', upsertErr.message || upsertErr);
-                          const { error: ssErr } = await supabase.from('site_settings').upsert({ key: 'relationship_start_date', value: { date: localRelationshipDate } }, { onConflict: 'key' });
-                          if (ssErr) throw ssErr;
-                        }
-
-                        // notify parent to refresh UI immediately
-                        if (onUpdateRelationshipStartDate) onUpdateRelationshipStartDate(new Date(localRelationshipDate));
-                        setRelationshipSaveMsg('Saved');
-                      } catch (err) {
-                        console.error('failed to save relationship start date', err);
-                        setRelationshipSaveMsg('Failed to save');
-                      } finally {
-                        setIsSavingRelationshipDate(false);
-                        setTimeout(() => setRelationshipSaveMsg(null), 2500);
-                      }
-                    }}
-                    disabled={!localRelationshipDate || isSavingRelationshipDate}
-                    className="whitespace-nowrap"
-                  >
-                    {isSavingRelationshipDate ? 'Saving...' : 'Save'}
-                  </Button>
-                </div>
-              </div>
-              {relationshipSaveMsg && <div className="text-sm text-rose-600 mt-2">{relationshipSaveMsg}</div>}
-            </div>
-
             {/* ─── Milestones management ─── */}
             <div className="p-4 bg-white/60 rounded-xl border border-rose-100 flex flex-col">
               <div className="flex items-center justify-between">
                 <h4 className="font-medium text-rose-800">Milestones</h4>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setIsMilestonesSectionExpanded(prev => !prev)}
-                  className="border-rose-200 text-rose-600 hover:bg-rose-50"
-                  title={isMilestonesSectionExpanded ? 'Collapse section' : 'Expand section'}
-                >
-                  <span className="mr-1">{isMilestonesSectionExpanded ? 'Collapse' : 'Expand'}</span>
-                  <ChevronDown className={`w-4 h-4 transition-transform ${isMilestonesSectionExpanded ? 'rotate-180' : ''}`} />
-                </Button>
-              </div>
-
-              {isMilestonesSectionExpanded && (
-                <>
-                  <div className="flex items-center justify-between mt-3 mb-3">
-                    <p className="text-xs text-rose-500">Manage the "Our Story" timeline entries.</p>
+                <div className="flex items-center gap-2">
+                  {isMilestonesSectionExpanded && (
                     <Button onClick={handleAddMilestone} size="sm" className="bg-rose-500 hover:bg-rose-600">
                       <Plus className="w-4 h-4 mr-1" />
                       Add
                     </Button>
-                  </div>
+                  )}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsMilestonesSectionExpanded(prev => !prev)}
+                    className="border-rose-200 text-rose-600 hover:bg-rose-50"
+                    title={isMilestonesSectionExpanded ? 'Collapse section' : 'Expand section'}
+                  >
+                    <span className="mr-1">{isMilestonesSectionExpanded ? 'Collapse' : 'Expand'}</span>
+                    <ChevronDown className={`w-4 h-4 transition-transform ${isMilestonesSectionExpanded ? 'rotate-180' : ''}`} />
+                  </Button>
+                </div>
+              </div>
 
+              {isMilestonesSectionExpanded && (
+                <>
                   {localMilestones.length === 0 && (
                     <p className="text-sm text-rose-400 py-4 text-center">No milestones yet.</p>
                   )}
 
-                  <div className="space-y-2">
+                  <div className="space-y-2 mt-3">
                     {localMilestones.map(ms => (
                       <div key={ms.id} className="bg-rose-50/50 rounded-lg border border-rose-100 overflow-hidden">
                         <div className="flex items-center gap-3 p-3">
@@ -1104,9 +1038,16 @@ function AdminPanel({
                             </button>
                           </div>
                         </div>
-                        {expandedMilestones.has(ms.id) && ms.description && (
+                        {expandedMilestones.has(ms.id) && (
                           <div className="border-t border-rose-100 px-3 py-2 bg-white/50">
-                            <p className="text-sm text-rose-700">{ms.description}</p>
+                            <p className="text-sm font-medium text-rose-800 break-words">{ms.title || '(untitled)'}</p>
+                            {ms.date && (
+                              <div className="flex items-start gap-2 mt-1">
+                                <Calendar className="w-4 h-4 text-rose-500 mt-0.5 flex-shrink-0" />
+                                <span className="text-sm text-rose-700">{new Date(ms.date + 'T00:00:00').toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</span>
+                              </div>
+                            )}
+                            {ms.description && <p className="text-sm text-rose-700 mt-1">{ms.description}</p>}
                           </div>
                         )}
                       </div>
@@ -1120,28 +1061,34 @@ function AdminPanel({
             <div className="p-4 bg-white/60 rounded-xl border border-rose-100 flex flex-col">
               <div className="flex items-center justify-between">
                 <h4 className="font-medium text-rose-800">Photos</h4>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setIsPhotosSectionExpanded(prev => !prev)}
-                  className="border-rose-200 text-rose-600 hover:bg-rose-50"
-                  title={isPhotosSectionExpanded ? 'Collapse section' : 'Expand section'}
-                >
-                  <span className="mr-1">{isPhotosSectionExpanded ? 'Collapse' : 'Expand'}</span>
-                  <ChevronDown className={`w-4 h-4 transition-transform ${isPhotosSectionExpanded ? 'rotate-180' : ''}`} />
-                </Button>
+                <div className="flex items-center gap-2">
+                  {isPhotosSectionExpanded && (
+                    <Button onClick={handleAdd} size="sm" className="bg-rose-500 hover:bg-rose-600">
+                      <Plus className="w-4 h-4 mr-1" />
+                      Add
+                    </Button>
+                  )}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsPhotosSectionExpanded(prev => !prev)}
+                    className="border-rose-200 text-rose-600 hover:bg-rose-50"
+                    title={isPhotosSectionExpanded ? 'Collapse section' : 'Expand section'}
+                  >
+                    <span className="mr-1">{isPhotosSectionExpanded ? 'Collapse' : 'Expand'}</span>
+                    <ChevronDown className={`w-4 h-4 transition-transform ${isPhotosSectionExpanded ? 'rotate-180' : ''}`} />
+                  </Button>
+                </div>
               </div>
 
               {isPhotosSectionExpanded && (
                 <>
-                  <p className="text-xs text-rose-500 mt-3 mb-3">Drag to reorder, click to edit or delete.</p>
-
                   {localPhotos.length === 0 && (
                     <p className="text-sm text-rose-400 py-4 text-center">No photos yet. Add one to get started!</p>
                   )}
 
-                  <div className="space-y-3">
+                  <div className="space-y-3 mt-3">
                     {localPhotos.map((photo, index) => (
                       <div
                         key={photo.id}
@@ -1196,6 +1143,7 @@ function AdminPanel({
                         </div>
                         {expandedPhotos.has(photo.id) && (
                           <div className="border-t border-rose-100 px-4 py-3 bg-white/50 space-y-2">
+                            <p className="text-sm font-medium text-rose-800 break-words">{photo.title}</p>
                             {photo.date && (
                               <div className="flex items-start gap-2">
                                 <Calendar className="w-4 h-4 text-rose-500 mt-0.5 flex-shrink-0" />
@@ -2045,8 +1993,6 @@ function App() {
           photos={photos} 
           onUpdatePhotos={handleUpdatePhotos}
           onClose={() => setShowAdmin(false)}
-          relationshipStartDate={relationshipStartDate}
-          onUpdateRelationshipStartDate={(d: Date) => setRelationshipStartDate(d)}
           milestones={remoteMilestones}
           onUpdateMilestones={setRemoteMilestones}
         />
